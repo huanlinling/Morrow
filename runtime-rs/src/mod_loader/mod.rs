@@ -60,6 +60,10 @@ impl ModRegistry {
         self.mods.get(name)
     }
 
+    pub fn has(&self, name: &str) -> bool {
+        self.mods.contains_key(name)
+    }
+
     pub fn len(&self) -> usize {
         self.mods.len()
     }
@@ -124,7 +128,16 @@ pub fn load_package(
     let manifest_contents = read_zip_entry(&mut archive, "manifest.toml")?;
     let manifest = manifest::parse(&manifest_contents)?;
 
-    // 2b. Read optional config.toml
+    // 3. Check dependencies
+    for (dep_name, dep_version) in &manifest.dependencies {
+        if !registry.has(dep_name) {
+            return Err(format!(
+                "dependency '{dep_name} {dep_version}' not found — load it first"
+            ));
+        }
+    }
+
+    // 3b. Read optional config.toml
     let config_data = read_zip_entry_optional(&mut archive, "config.toml");
 
     eprintln!(

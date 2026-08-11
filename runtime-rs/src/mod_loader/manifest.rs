@@ -11,6 +11,8 @@ pub struct Manifest {
     #[allow(dead_code)]
     pub morrow: MorrowMeta,
     pub entry: EntryMeta,
+    #[serde(default)]
+    pub dependencies: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -8,5 +8,8 @@ license = "MIT"
 [morrow]
 api_version = 1
 
+[dependencies]
+chat-bot = ">=0.1.0"
+
 [entry]
 symbol = "morrow_mod_init"

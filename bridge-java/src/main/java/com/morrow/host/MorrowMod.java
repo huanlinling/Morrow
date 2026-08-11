@@ -102,12 +102,21 @@ public class MorrowMod implements ModInitializer {
             return;
         }
 
-        // 5. Scan for and load .morrow packages
+        // 5. Scan for and load .morrow packages (two-pass for deps)
         Path modsDir = Path.of("mods");
         if (Files.isDirectory(modsDir)) {
-            try (Stream<Path> files = Files.list(modsDir)) {
-                files.filter(p -> p.toString().endsWith(".morrow"))
-                     .forEach(pkg -> loadMorrowPackage(bridge, loadMod, runtimeHandle, pkg));
+            try {
+                var packages = Files.list(modsDir)
+                    .filter(p -> p.toString().endsWith(".morrow"))
+                    .toList();
+                var failed = new java.util.ArrayList<Path>();
+                for (var pkg : packages) {
+                    if (!loadMorrowPackage(bridge, loadMod, runtimeHandle, pkg))
+                        failed.add(pkg);
+                }
+                for (var pkg : failed) {
+                    loadMorrowPackage(bridge, loadMod, runtimeHandle, pkg);
+                }
             } catch (Exception e) {
                 LOG.warn("Failed to scan mods directory: {}", e.getMessage());
             }
@@ -169,14 +178,13 @@ public class MorrowMod implements ModInitializer {
 
     // ─── Helpers ─────────────────────────────────
 
-    private static void loadMorrowPackage(PanamaBridge bridge, MethodHandle loadMod,
+    private static boolean loadMorrowPackage(PanamaBridge bridge, MethodHandle loadMod,
                                            long runtimeHandle, Path pkg) {
         LOG.info("Loading mod: {}", pkg.getFileName());
         try {
             String pathStr = pkg.toAbsolutePath().toString();
             byte[] pathBytes = pathStr.getBytes(StandardCharsets.UTF_8);
 
-            // Allocate the path string in the global arena for the FFI call
             MemorySegment pathSeg = Arena.global().allocate(pathBytes.length);
             pathSeg.copyFrom(MemorySegment.ofArray(pathBytes));
 
@@ -187,11 +195,14 @@ public class MorrowMod implements ModInitializer {
 
             if (status == 0) {
                 LOG.info("  Loaded successfully: {}", pkg.getFileName());
+                return true;
             } else {
                 LOG.error("  Failed to load {} (error code {})", pkg.getFileName(), status);
+                return false;
             }
         } catch (Throwable e) {
             LOG.error("  Failed to load {}: {}", pkg.getFileName(), e.getMessage());
+            return false;
         }
     }
 
