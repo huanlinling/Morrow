@@ -1,0 +1,3 @@
+# Hello Ferrum configuration
+greeting = "Hello from Rust!"
+broadcast_interval = 200

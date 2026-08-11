@@ -88,6 +88,13 @@ impl ModRegistry {
 /// 8. Call the entry point
 /// 9. Track the loaded mod in the registry
 ///
+/// Read config.toml from a .ferrum package without loading the mod.
+pub fn read_zip_config(package_path: &Path) -> Option<Vec<u8>> {
+    let file = std::fs::File::open(package_path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    read_zip_entry_optional(&mut archive, "config.toml")
+}
+
 /// Discovered optional exports from a mod.
 pub struct ModExports {
     pub tick_callback: Option<unsafe extern "C" fn(u64)>,
@@ -116,6 +123,9 @@ pub fn load_package(
     // 2. Read manifest.toml
     let manifest_contents = read_zip_entry(&mut archive, "manifest.toml")?;
     let manifest = manifest::parse(&manifest_contents)?;
+
+    // 2b. Read optional config.toml
+    let config_data = read_zip_entry_optional(&mut archive, "config.toml");
 
     eprintln!(
         "[Ferrum] Loading mod: {} v{}",
@@ -230,6 +240,16 @@ pub fn load_package(
 }
 
 // ─── Helpers ──────────────────────────────────
+
+fn read_zip_entry_optional(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    name: &str,
+) -> Option<Vec<u8>> {
+    let mut entry = archive.by_name(name).ok()?;
+    let mut buf = Vec::new();
+    entry.read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
 
 fn read_zip_entry(
     archive: &mut zip::ZipArchive<std::fs::File>,

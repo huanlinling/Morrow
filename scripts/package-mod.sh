@@ -42,8 +42,9 @@ LIB_NAME="lib${CARGO_NAME}.${LIB_EXT}"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-# Copy manifest
+# Copy manifest, optional config
 cp "$MOD_DIR"/manifest.toml "$TMPDIR"/
+[ -f "$MOD_DIR"/config.toml ] && cp "$MOD_DIR"/config.toml "$TMPDIR"/
 
 # Copy artifact to platform dir
 mkdir -p "$TMPDIR/$PLATFORM"

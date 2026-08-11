@@ -19,6 +19,8 @@ pub struct RuntimeApi {
     pub get_player_list: unsafe extern "C" fn(runtime_handle: u64, buf: *mut u8, buf_cap: u32) -> u32,
     pub execute_command: unsafe extern "C" fn(runtime_handle: u64, cmd_ptr: *const u8, cmd_len: u32),
     pub get_world_time: unsafe extern "C" fn(runtime_handle: u64) -> i64,
+    /// Read the mod's config.toml. Returns bytes written, 0 if no config.
+    pub get_config: unsafe extern "C" fn(runtime_handle: u64, mod_name_ptr: *const u8, mod_name_len: u32, buf: *mut u8, buf_cap: u32) -> u32,
 }
 
 impl RuntimeApi {
@@ -30,9 +32,30 @@ impl RuntimeApi {
             get_player_list: crate::ferrum_get_player_list,
             execute_command: crate::ferrum_execute_command,
             get_world_time: crate::ferrum_get_world_time,
+            get_config: crate::ferrum_get_mod_config,
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Mod config storage
+// ---------------------------------------------------------------------------
+
+pub struct ConfigStore {
+    configs: Mutex<HashMap<String, Vec<u8>>>,
+}
+
+impl ConfigStore {
+    pub fn new() -> Self { ConfigStore { configs: Mutex::new(HashMap::new()) } }
+    pub fn insert(&self, name: &str, data: Vec<u8>) {
+        self.configs.lock().unwrap().insert(name.to_string(), data);
+    }
+    pub fn get(&self, name: &str) -> Option<Vec<u8>> {
+        self.configs.lock().unwrap().get(name).cloned()
+    }
+}
+
+impl Default for ConfigStore { fn default() -> Self { Self::new() } }
 
 // ---------------------------------------------------------------------------
 // Host Vtable (from Java)

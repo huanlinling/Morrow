@@ -8,11 +8,19 @@ static mut API: Option<RuntimeApi> = None;
 
 #[ferrum::mod_main]
 fn init(_ctx: &mut Context, api: *const RuntimeApi) -> Result<(), FerrumError> {
-    ferrum::info!("Hello from Rust!");
     let a = unsafe { api.read() };
+
+    // Read config
+    let mut cbuf = [0u8; 512];
+    let name = b"hello-ferrum";
+    let n = unsafe { (a.get_config)(0, name.as_ptr(), name.len() as u32, cbuf.as_mut_ptr(), cbuf.len() as u32) };
+    if n > 0 {
+        let cfg = std::str::from_utf8(&cbuf[..n as usize]).unwrap_or("");
+        ferrum::info!("Config loaded: {}", cfg.lines().next().unwrap_or(""));
+    }
+
     unsafe {
-        let name = b"ferrum";
-        (a.register_command)(0, name.as_ptr(), name.len() as u32, ferrum_cmd);
+        (a.register_command)(0, b"ferrum".as_ptr(), 6, ferrum_cmd);
         (a.register_command)(0, b"day".as_ptr(), 3, day_cmd);
         API = Some(a);
     }

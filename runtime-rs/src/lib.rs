@@ -155,8 +155,16 @@ pub extern "C" fn ferrum_load_mod(
         // Look up the mod registry for this runtime handle.
         match MOD_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
             Some(registry) => {
+                let config_data = mod_loader::read_zip_config(package_path);
                 match mod_loader::load_package(package_path, registry) {
                     Ok((name, exports)) => {
+                        // Store config if present
+                        if let Some(ref cfg) = config_data {
+                            if let Some(store) = CONFIG_STORES.lock().unwrap().get(&handle.as_u64()) {
+                                store.insert(&name, cfg.clone());
+                                eprintln!("[Ferrum]   Config loaded ({} bytes)", cfg.len());
+                            }
+                        }
                         if let Some(cb) = exports.tick_callback {
                             if let Some(reg) = TICK_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
                                 reg.register(&name, cb);
@@ -267,6 +275,9 @@ static HOST_APIS: LazyLock<Mutex<HashMap<u64, host_api::HostApi>>> =
 static COMMAND_REGISTRIES: LazyLock<Mutex<HashMap<u64, host_api::CommandRegistry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+static CONFIG_STORES: LazyLock<Mutex<HashMap<u64, host_api::ConfigStore>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 static EVENT_CALLBACKS: LazyLock<Mutex<HashMap<u64, host_api::ModEventCallbacks>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -286,6 +297,7 @@ fn register_mod_registry(handle: u64) {
     ERROR_CHANNELS.lock().unwrap().insert(handle, error::ErrorChannel::new());
     HOST_APIS.lock().unwrap().insert(handle, host_api::HostApi::new());
     COMMAND_REGISTRIES.lock().unwrap().insert(handle, host_api::CommandRegistry::new());
+    CONFIG_STORES.lock().unwrap().insert(handle, host_api::ConfigStore::new());
     EVENT_CALLBACKS.lock().unwrap().insert(handle, host_api::ModEventCallbacks {
         player_join: HashMap::new(),
         player_leave: HashMap::new(),
@@ -430,6 +442,34 @@ pub extern "C" fn ferrum_get_world_time(runtime_handle: u64) -> i64 {
         let apis = HOST_APIS.lock().unwrap();
         let api = if runtime_handle == 0 { apis.values().next() } else { apis.get(&runtime_handle) };
         api.and_then(|a| a.get_world_time()).unwrap_or(-1)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_get_mod_config(
+    runtime_handle: u64,
+    mod_name_ptr: *const u8, mod_name_len: u32,
+    buf: *mut u8, buf_cap: u32,
+) -> u32 {
+    panic::ffi_boundary(0, || {
+        let name = unsafe {
+            let bytes = std::slice::from_raw_parts(mod_name_ptr, mod_name_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("")
+        };
+        let stores = CONFIG_STORES.lock().unwrap();
+        let store = if runtime_handle == 0 { stores.values().next() } else { stores.get(&runtime_handle) };
+        if let Some(store) = store {
+            if let Some(data) = store.get(name) {
+                let len = data.len().min(buf_cap as usize);
+                unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), buf, len); }
+                return len as u32;
+            }
+        }
+        0
     })
 }
 
