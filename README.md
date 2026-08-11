@@ -62,7 +62,7 @@ java -javaagent:morrow.jar -jar server.jar
   │     └── Mixin → MinecraftServer (loadWorld / tick / shutdown)
   │           └── EventBuffer → 1 FFM/tick batch dispatch
   │
-  └── Panama FFI (~10ns/downcall)
+  └── Panama FFI (low-latency native call)
         └── Rust Runtime (libmorrow_runtime.so)
              ├── parse batch → dispatch to mods
              ├── panic quarantine
