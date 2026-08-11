@@ -85,8 +85,8 @@ ferrum/
 | M3: Rust Mod Loading | ✅ Done |
 | M4: Event Dispatch | ✅ Done |
 | M5: SDK Macros | ✅ Done |
-| M6: Linux Verification | 🔨 In Progress |
-| M7: Benchmark Suite | ⬜ Planned |
+| M6: Linux Verification | ✅ Done |
+| M7: Benchmark Suite | ✅ Done |
 
 ## Development
 

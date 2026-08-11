@@ -20,7 +20,8 @@ javac --release 21 --enable-preview \
     -d "$OUT_DIR" \
     src/main/java/com/ferrum/host/PanamaBridge.java \
     src/test/java/com/ferrum/host/M0_AddTest.java \
-    src/test/java/com/ferrum/host/M1_LifecycleTest.java
+    src/test/java/com/ferrum/host/M1_LifecycleTest.java \
+    src/test/java/com/ferrum/host/Benchmark.java
 echo "    Java compile OK."
 
 echo ""
@@ -34,6 +35,14 @@ echo "==> Step 4: M1 Lifecycle Test..."
 java --enable-preview --enable-native-access=ALL-UNNAMED \
     -cp "$OUT_DIR" \
     com.ferrum.host.M1_LifecycleTest
+
+echo ""
+echo "==> Step 5: Performance Benchmarks..."
+# Use a smaller iteration count for CI, larger for manual runs
+BENCH_ITERS=${FERUM_BENCH_ITERS:-100000}
+java --enable-preview --enable-native-access=ALL-UNNAMED \
+    -cp "$OUT_DIR" \
+    com.ferrum.host.Benchmark
 
 echo ""
 echo "==> All tests passed."
