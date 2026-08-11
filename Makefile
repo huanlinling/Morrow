@@ -1,41 +1,39 @@
 # Morrow Development Commands
 #
-# TL;DR:
 #   make build         → build everything
 #   make test          → run all tests
-#   make test-bridge   → M0/M1 Panama bridge tests
+#   make test-bridge   → Panama bridge tests (M0 + M1)
 #   make package-hello → create hello-morrow.morrow
 #   make clean         → remove build artifacts
 
-.PHONY: build build-runtime build-mod test test-bridge package-hello clean
+.PHONY: build build-runtime build-mods test test-bridge package-hello clean
 
 # ─── Build ──────────────────────────────────
 
 build-runtime:
 	@echo "==> Building Rust runtime..."
-	cd runtime-rs && cargo build --release
+	cargo build --release
 
-build-mod:
+build-mods:
 	@echo "==> Building example mods..."
-	cd examples/hello-morrow && cargo build --release
+	cargo build --release -p hello-morrow -p chat-bot
 
-build: build-runtime build-mod
+build: build-runtime build-mods
 	@echo "==> Build complete."
 
 # ─── Test ───────────────────────────────────
 
 test:
 	@echo "==> Running Rust tests..."
-	cd runtime-rs && cargo test
-	cd sdk-rs && cargo test
+	cargo test
 
 test-bridge:
-	@echo "==> Running Morrow bridge tests..."
+	@echo "==> Running bridge tests..."
 	cd bridge-java && bash build.sh
 
 # ─── Package ─────────────────────────────────
 
-package-hello: build-mod
+package-hello: build-mods
 	@echo "==> Packaging hello-morrow..."
 	bash scripts/package-mod.sh examples/hello-morrow
 
@@ -43,8 +41,6 @@ package-hello: build-mod
 
 clean:
 	@echo "==> Cleaning build artifacts..."
-	cd runtime-rs && cargo clean
-	cd sdk-rs && cargo clean
-	cd examples/hello-morrow && cargo clean
+	cargo clean
 	rm -rf bridge-java/out/
 	rm -f *.morrow

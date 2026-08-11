@@ -19,6 +19,8 @@ pub struct RuntimeApi {
     pub get_player_list: unsafe extern "C" fn(runtime_handle: u64, buf: *mut u8, buf_cap: u32) -> u32,
     pub execute_command: unsafe extern "C" fn(runtime_handle: u64, cmd_ptr: *const u8, cmd_len: u32),
     pub get_world_time: unsafe extern "C" fn(runtime_handle: u64) -> i64,
+    /// Log a message through the runtime's logger. level: 1=info, 2=warn, 3=error.
+    pub log: unsafe extern "C" fn(runtime_handle: u64, level: u32, msg_ptr: *const u8, msg_len: u32),
     /// Read the mod's config.toml. Returns bytes written, 0 if no config.
     pub get_config: unsafe extern "C" fn(runtime_handle: u64, mod_name_ptr: *const u8, mod_name_len: u32, buf: *mut u8, buf_cap: u32) -> u32,
     /// Request a capability version. Returns version (1, 2, ...) or 0 if unavailable.
@@ -34,6 +36,7 @@ impl RuntimeApi {
             get_player_list: crate::morrow_get_player_list,
             execute_command: crate::morrow_execute_command,
             get_world_time: crate::morrow_get_world_time,
+            log: crate::morrow_mod_log,
             get_config: crate::morrow_get_mod_config,
             request_capability: crate::morrow_request_capability,
         }
@@ -69,6 +72,7 @@ type SendMessageFn = unsafe extern "C" fn(*const u8, u32);
 type GetPlayerListFn = unsafe extern "C" fn(*mut u8, u32) -> u32;
 type ExecuteCommandFn = unsafe extern "C" fn(*const u8, u32);
 type GetWorldTimeFn = unsafe extern "C" fn() -> i64;
+type LogMessageFn = unsafe extern "C" fn(u32, *const u8, u32);
 
 #[repr(C)]
 pub struct HostVtable {
@@ -77,6 +81,7 @@ pub struct HostVtable {
     pub get_player_list: Option<GetPlayerListFn>,
     pub execute_command: Option<ExecuteCommandFn>,
     pub get_world_time: Option<GetWorldTimeFn>,
+    pub log_message: Option<LogMessageFn>,
 }
 
 pub struct HostApi {
@@ -129,6 +134,16 @@ impl HostApi {
         let guard = self.vtable.lock().unwrap();
         let func = guard.as_ref()?.get_world_time?;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() })).ok()
+    }
+
+    pub fn log_message(&self, level: u32, msg: &str) -> bool {
+        let guard = self.vtable.lock().unwrap();
+        let Some(vtable) = guard.as_ref() else { return false };
+        let Some(func) = vtable.log_message else { return false };
+        let bytes = msg.as_bytes();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            func(level, bytes.as_ptr(), bytes.len() as u32);
+        })).is_ok()
     }
 }
 

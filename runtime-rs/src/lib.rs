@@ -7,6 +7,7 @@ mod abi;
 mod error;
 mod event;
 mod host_api;
+mod logger;
 mod mod_loader;
 mod panic;
 mod runtime;
@@ -52,6 +53,9 @@ pub extern "C" fn morrow_init(abi_version: u32) -> u64 {
 
         let kernel = RuntimeKernel::new();
         let handle = RUNTIMES.insert(kernel);
+
+        // Init logger (only once)
+        logger::init();
 
         // Create a mod registry for this runtime
         register_mod_registry(handle.as_u64());
@@ -278,7 +282,7 @@ static LIFECYCLE_REGISTRIES: LazyLock<Mutex<HashMap<u64, LifecycleRegistry>>> =
 static ERROR_CHANNELS: LazyLock<Mutex<HashMap<u64, error::ErrorChannel>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-static HOST_APIS: LazyLock<Mutex<HashMap<u64, host_api::HostApi>>> =
+pub(crate) static HOST_APIS: LazyLock<Mutex<HashMap<u64, host_api::HostApi>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 static COMMAND_REGISTRIES: LazyLock<Mutex<HashMap<u64, host_api::CommandRegistry>>> =
@@ -496,6 +500,32 @@ pub extern "C" fn morrow_request_capability(
             std::str::from_utf8(bytes).unwrap_or("")
         };
         CAPABILITIES.get(cap).copied().unwrap_or(0)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Mod logging
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn morrow_mod_log(
+    _runtime_handle: u64,
+    level: u32,
+    msg_ptr: *const u8,
+    msg_len: u32,
+) {
+    panic::ffi_boundary((), || {
+        let msg = unsafe {
+            let bytes = std::slice::from_raw_parts(msg_ptr, msg_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("<invalid utf8>")
+        };
+        eprintln!("{}", msg);
+        // Also forward to Java if available
+        if let Ok(apis) = HOST_APIS.lock() {
+            if let Some(api) = apis.values().next() {
+                api.log_message(level, msg);
+            }
+        }
     })
 }
 

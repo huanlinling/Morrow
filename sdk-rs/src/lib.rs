@@ -69,7 +69,8 @@ pub mod prelude {
 
 // ─── Logging macros ────────────────────────────
 
-/// Log an info-level message. Format: `[mod-name] msg`.
+/// Log an info-level message to the Minecraft server log.
+/// Format: `[mod-name] msg`
 #[macro_export]
 macro_rules! info {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {

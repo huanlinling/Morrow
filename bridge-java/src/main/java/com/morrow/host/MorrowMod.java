@@ -249,6 +249,17 @@ public class MorrowMod implements ModInitializer {
         return currentServer.getOverworld().getTimeOfDay();
     }
 
+    private static void logMessage(int level, long msgPtr, int msgLen) {
+        byte[] bytes = MemorySegment.ofAddress(msgPtr).reinterpret(msgLen).toArray(ValueLayout.JAVA_BYTE);
+        String msg = new String(bytes, StandardCharsets.UTF_8);
+        switch (level) {
+            case 3 -> LOG.error(msg);
+            case 2 -> LOG.warn(msg);
+            case 1 -> LOG.info(msg);
+            default -> LOG.debug(msg);
+        }
+    }
+
     private static void registerHostApi(PanamaBridge bridge, long runtimeHandle) {
         try {
             Linker linker = Linker.nativeLinker();
@@ -278,19 +289,25 @@ public class MorrowMod implements ModInitializer {
                             MethodType.methodType(long.class)),
                     FunctionDescriptor.of(ValueLayout.JAVA_LONG), Arena.global());
 
-            // Vtable layout: [0]=pc, [8]=sm, [16]=pl, [24]=ec, [32]=wt
-            MemorySegment vtable = Arena.global().allocate(40);
+            var logStub = linker.upcallStub(
+                    MethodHandles.lookup().findStatic(MorrowMod.class, "logMessage",
+                            MethodType.methodType(void.class, int.class, long.class, int.class)),
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global());
+
+            // Vtable: [0]=pc, [8]=sm, [16]=pl, [24]=ec, [32]=wt, [40]=log
+            MemorySegment vtable = Arena.global().allocate(48);
             vtable.set(ValueLayout.ADDRESS, 0, pcStub);
             vtable.set(ValueLayout.ADDRESS, 8, smStub);
             vtable.set(ValueLayout.ADDRESS, 16, plStub);
             vtable.set(ValueLayout.ADDRESS, 24, ecStub);
             vtable.set(ValueLayout.ADDRESS, 32, wtStub);
+            vtable.set(ValueLayout.ADDRESS, 40, logStub);
 
             MethodHandle registerApi = bridge.downcall("morrow_register_host_api",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
             registerApi.invokeExact(runtimeHandle, vtable);
 
-            LOG.info("Host API registered (5 upcalls).");
+            LOG.info("Host API registered (6 upcalls, log active).");
         } catch (Throwable e) {
             LOG.error("Failed to register host API: {}", e.getMessage(), e);
         }

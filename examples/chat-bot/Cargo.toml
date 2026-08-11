@@ -8,4 +8,5 @@ description = "Morrow chat bot example — responds to messages"
 crate-type = ["cdylib"]
 
 [dependencies]
+log = "0.4.33"
 morrow = { path = "../../sdk-rs" }

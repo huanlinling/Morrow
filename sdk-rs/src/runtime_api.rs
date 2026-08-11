@@ -12,6 +12,8 @@ pub struct RuntimeApi {
     pub get_player_list: unsafe extern "C" fn(runtime_handle: u64, buf: *mut u8, buf_cap: u32) -> u32,
     pub execute_command: unsafe extern "C" fn(runtime_handle: u64, cmd_ptr: *const u8, cmd_len: u32),
     pub get_world_time: unsafe extern "C" fn(runtime_handle: u64) -> i64,
+    /// Log a message. level: 1=info, 2=warn, 3=error.
+    pub log: unsafe extern "C" fn(runtime_handle: u64, level: u32, msg_ptr: *const u8, msg_len: u32),
     pub get_config: unsafe extern "C" fn(runtime_handle: u64, mod_name_ptr: *const u8, mod_name_len: u32, buf: *mut u8, buf_cap: u32) -> u32,
     pub request_capability: unsafe extern "C" fn(runtime_handle: u64, cap_ptr: *const u8, cap_len: u32) -> u32,
 }
