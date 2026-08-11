@@ -579,6 +579,13 @@ pub extern "C" fn morrow_dispatch_batch(
             .map(|q| q.quarantined.lock().unwrap().clone())
             .unwrap_or_default();
 
+        // Sync world snapshot once (1 upcall, not N)
+        let mut snap_buf = [0u8; 4096];
+        let _snapshot = HOST_APIS.lock().unwrap()
+            .get(&runtime_handle)
+            .and_then(|api| api.get_world_snapshot(&mut snap_buf))
+            .and_then(|n| host_api::WorldSnapshot::parse(&snap_buf[..n]));
+
         let tick_reg = TICK_REGISTRIES.lock().unwrap();
         let tick_cbs = tick_reg.get(&runtime_handle);
         let event_cbs = EVENT_CALLBACKS.lock().unwrap();

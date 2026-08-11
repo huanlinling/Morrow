@@ -73,6 +73,7 @@ type GetPlayerListFn = unsafe extern "C" fn(*mut u8, u32) -> u32;
 type ExecuteCommandFn = unsafe extern "C" fn(*const u8, u32);
 type GetWorldTimeFn = unsafe extern "C" fn() -> i64;
 type LogMessageFn = unsafe extern "C" fn(u32, *const u8, u32);
+type GetWorldSnapshotFn = unsafe extern "C" fn(*mut u8, u32) -> u32;
 
 #[repr(C)]
 pub struct HostVtable {
@@ -82,6 +83,7 @@ pub struct HostVtable {
     pub execute_command: Option<ExecuteCommandFn>,
     pub get_world_time: Option<GetWorldTimeFn>,
     pub log_message: Option<LogMessageFn>,
+    pub get_world_snapshot: Option<GetWorldSnapshotFn>,
 }
 
 pub struct HostApi {
@@ -144,6 +146,45 @@ impl HostApi {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             func(level, bytes.as_ptr(), bytes.len() as u32);
         })).is_ok()
+    }
+
+    pub fn get_world_snapshot(&self, buf: &mut [u8]) -> Option<usize> {
+        let guard = self.vtable.lock().unwrap();
+        let func = guard.as_ref()?.get_world_snapshot?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            func(buf.as_mut_ptr(), buf.len() as u32) as usize
+        }));
+        result.ok().map(|n| n.min(buf.len()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// World snapshot
+// ---------------------------------------------------------------------------
+
+/// Cached world state, refreshed once per tick via a single upcall.
+pub struct WorldSnapshot {
+    pub player_count: u32,
+    pub world_time: i64,
+    /// Player names (borrowed from snapshot buffer).
+    pub player_names: Vec<String>,
+}
+
+impl WorldSnapshot {
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() < 12 { return None; }
+        let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let time = i64::from_le_bytes(data[4..12].try_into().unwrap());
+        let mut names = Vec::with_capacity(count as usize);
+        let mut pos = 12;
+        for _ in 0..count {
+            if pos + 2 > data.len() { break; }
+            let len = u16::from_le_bytes([data[pos], data[pos+1]]) as usize; pos += 2;
+            if pos + len > data.len() { break; }
+            names.push(String::from_utf8_lossy(&data[pos..pos+len]).into_owned());
+            pos += len;
+        }
+        Some(WorldSnapshot { player_count: count, world_time: time, player_names: names })
     }
 }
 

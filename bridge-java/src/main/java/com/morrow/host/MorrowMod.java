@@ -179,6 +179,25 @@ public class MorrowMod {
         server.getCommandManager().executeWithPrefix(server.getCommandSource(), new String(b, StandardCharsets.UTF_8));
     }
     private static long getWorldTime() { return server.getOverworld().getTimeOfDay(); }
+
+    /** Fill buffer with world snapshot (players + time), return bytes written. */
+    private static int getWorldSnapshot(long bufPtr, int bufCap) {
+        var players = server.getPlayerManager().getPlayerList();
+        var buf = MemorySegment.ofAddress(bufPtr).reinterpret(bufCap);
+        int pos = 0;
+        // u32: player count
+        buf.set(ValueLayout.JAVA_INT_UNALIGNED, pos, players.size()); pos += 4;
+        // u64: world time
+        buf.set(ValueLayout.JAVA_LONG_UNALIGNED, pos, getWorldTime()); pos += 8;
+        for (var p : players) {
+            byte[] name = p.getName().getString().getBytes(StandardCharsets.UTF_8);
+            if (pos + 2 + name.length > bufCap) break;
+            buf.set(ValueLayout.JAVA_SHORT_UNALIGNED, pos, (short) name.length); pos += 2;
+            for (byte b : name) { buf.set(ValueLayout.JAVA_BYTE, pos++, b); }
+        }
+        return pos;
+    }
+
     private static void logMessage(int level, long ptr, int len) {
         byte[] b = MemorySegment.ofAddress(ptr).reinterpret(len).toArray(ValueLayout.JAVA_BYTE);
         String msg = new String(b, StandardCharsets.UTF_8);
@@ -188,13 +207,14 @@ public class MorrowMod {
     private static void registerHostApi() {
         try {
             var lookup = MethodHandles.lookup(); var linker = Linker.nativeLinker();
-            var vtable = Arena.global().allocate(48);
+            var vtable = Arena.global().allocate(56);
             vtable.set(ValueLayout.ADDRESS, 0, linker.upcallStub(lookup.findStatic(MorrowMod.class, "getPlayerCount", MethodType.methodType(int.class)), FunctionDescriptor.of(ValueLayout.JAVA_INT), Arena.global()));
             vtable.set(ValueLayout.ADDRESS, 8, linker.upcallStub(lookup.findStatic(MorrowMod.class, "sendMessage", MethodType.methodType(void.class, long.class, int.class)), FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global()));
             vtable.set(ValueLayout.ADDRESS, 16, linker.upcallStub(lookup.findStatic(MorrowMod.class, "getPlayerList", MethodType.methodType(int.class, long.class, int.class)), FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global()));
             vtable.set(ValueLayout.ADDRESS, 24, linker.upcallStub(lookup.findStatic(MorrowMod.class, "executeCommand", MethodType.methodType(void.class, long.class, int.class)), FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global()));
             vtable.set(ValueLayout.ADDRESS, 32, linker.upcallStub(lookup.findStatic(MorrowMod.class, "getWorldTime", MethodType.methodType(long.class)), FunctionDescriptor.of(ValueLayout.JAVA_LONG), Arena.global()));
             vtable.set(ValueLayout.ADDRESS, 40, linker.upcallStub(lookup.findStatic(MorrowMod.class, "logMessage", MethodType.methodType(void.class, int.class, long.class, int.class)), FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global()));
+            vtable.set(ValueLayout.ADDRESS, 48, linker.upcallStub(lookup.findStatic(MorrowMod.class, "getWorldSnapshot", MethodType.methodType(int.class, long.class, int.class)), FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global()));
             var ra = bridge.downcall("morrow_register_host_api", FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
             ra.invokeExact(runtimeHandle, vtable);
         } catch (Throwable e) { LOG.error("Host API: {}", e.getMessage()); }

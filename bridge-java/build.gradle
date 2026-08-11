@@ -2,10 +2,6 @@ plugins {
     id 'fabric-loom' version "${fabric_loom_version}"
 }
 
-repositories {
-    mavenCentral()
-}
-
 group = project.maven_group
 version = project.mod_version
 base { archivesName = project.archives_base_name }
@@ -16,11 +12,11 @@ java {
 }
 
 dependencies {
+    // Loom provides remapped Minecraft for compilation only
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-
-    // Fabric Loader — only for Loom runServer in dev
-    // Production: java -javaagent:morrow.jar (Agent premain bootstraps Mixin)
+    // Fabric Loader — dev runtime only (Loom runServer).
+    // Production: java -javaagent:morrow.jar (Mixin via Agent, no Fabric)
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 }
 
@@ -37,18 +33,6 @@ tasks.processResources {
     }
 }
 
-// Agent JAR (thin — deps on classpath via Loom in dev)
-tasks.jar {
-    manifest {
-        attributes(
-            'Premain-Class': 'com.morrow.agent.MorrowAgent',
-            'Agent-Class': 'com.morrow.agent.MorrowAgent',
-            'Can-Redefine-Classes': 'true',
-            'Can-Retransform-Classes': 'true'
-        )
-    }
-}
-
 loom {
     runs {
         server {
@@ -60,11 +44,20 @@ loom {
     }
 }
 
-sourceSets {
-    main {
-        java.srcDirs = ['src/main/java']
-        resources.srcDirs = ['src/main/resources']
+// Agent JAR manifest
+tasks.jar {
+    manifest {
+        attributes(
+            'Premain-Class': 'com.morrow.agent.MorrowAgent',
+            'Agent-Class': 'com.morrow.agent.MorrowAgent',
+            'Can-Redefine-Classes': 'true',
+            'Can-Retransform-Classes': 'true'
+        )
     }
+}
+
+sourceSets {
+    main { java.srcDirs = ['src/main/java']; resources.srcDirs = ['src/main/resources'] }
 }
 
 tasks.withType(JavaCompile).configureEach {
