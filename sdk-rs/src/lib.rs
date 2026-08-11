@@ -50,6 +50,21 @@ pub mod context;
 pub mod error;
 pub mod runtime_api;
 
+// ─── Zero-copy helpers ─────────────────────────
+
+/// Read a `&str` from FFI pointer + length. Zero-copy — borrows the
+/// original buffer. Falls back to `"<invalid>"` on bad UTF-8.
+///
+/// Use this in event callbacks instead of `String::from_utf8_lossy`
+/// to avoid allocation.
+#[inline]
+pub fn read_str<'a>(ptr: *const u8, len: u32) -> &'a str {
+    unsafe {
+        let bytes = std::slice::from_raw_parts(ptr, len as usize);
+        std::str::from_utf8(bytes).unwrap_or("<invalid utf-8>")
+    }
+}
+
 // Re-export the proc macro
 pub use morrow_macros::mod_main;
 
