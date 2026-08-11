@@ -18,6 +18,7 @@
 
 pub mod context;
 pub mod error;
+pub mod runtime_api;
 
 // Re-export the proc macro
 pub use ferrum_macros::mod_main;
@@ -25,11 +26,13 @@ pub use ferrum_macros::mod_main;
 // Re-export commonly used types
 pub use context::Context;
 pub use error::FerrumError;
+pub use runtime_api::RuntimeApi;
 
 /// Prelude: everything most mods need.
 pub mod prelude {
     pub use crate::context::Context;
     pub use crate::error::FerrumError;
+    pub use crate::runtime_api::RuntimeApi;
     pub use ferrum_macros::mod_main;
     pub use crate::{info, warn, error};
 }

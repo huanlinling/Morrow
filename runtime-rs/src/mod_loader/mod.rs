@@ -8,6 +8,7 @@ pub mod manifest;
 
 use artifact::Platform;
 use manifest::Manifest;
+use crate::host_api::RuntimeApi;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -30,6 +31,12 @@ pub struct LoadedMod {
     /// Optional tick callback, discovered from `ferrum_mod_tick` export.
     #[allow(dead_code)]
     pub tick_callback: Option<unsafe extern "C" fn(u64)>,
+    /// Optional lifecycle: server started.
+    #[allow(dead_code)]
+    pub server_start_callback: Option<unsafe extern "C" fn()>,
+    /// Optional lifecycle: server stopping.
+    #[allow(dead_code)]
+    pub server_stop_callback: Option<unsafe extern "C" fn()>,
 }
 
 /// Registry of all loaded mods.
@@ -81,12 +88,18 @@ impl ModRegistry {
 /// 8. Call the entry point
 /// 9. Track the loaded mod in the registry
 ///
-/// Returns the mod name and optional tick callback on success,
-/// or an error message on failure.
+/// Discovered optional exports from a mod.
+pub struct ModExports {
+    pub tick_callback: Option<unsafe extern "C" fn(u64)>,
+    pub server_start_callback: Option<unsafe extern "C" fn()>,
+    pub server_stop_callback: Option<unsafe extern "C" fn()>,
+}
+
+/// Returns the mod name and discovered optional exports on success.
 pub fn load_package(
     package_path: &Path,
     registry: &mut ModRegistry,
-) -> Result<(String, Option<unsafe extern "C" fn(u64)>), String> {
+) -> Result<(String, ModExports), String> {
     // 1. Open ZIP
     let file = std::fs::File::open(package_path)
         .map_err(|e| format!("cannot open {}: {e}", package_path.display()))?;
@@ -116,14 +129,15 @@ pub fn load_package(
             .map_err(|e| format!("failed to load native mod library: {e}"))?
     };
 
-    // 7-8. Look up and call entry point
+    // 7-8. Build RuntimeApi and call entry point
+    let api = RuntimeApi::new();
     let entry_symbol = &manifest.entry.symbol;
     unsafe {
-        let entry: libloading::Symbol<unsafe extern "C" fn() -> u32> = library
+        let entry: libloading::Symbol<unsafe extern "C" fn(*const RuntimeApi) -> u32> = library
             .get(entry_symbol.as_bytes())
             .map_err(|e| format!("entry symbol '{entry_symbol}' not found: {e}"))?;
 
-        let status = entry();
+        let status = entry(&api as *const RuntimeApi);
         if status != 0 {
             return Err(format!(
                 "mod '{}' entry point returned error code {status}",
@@ -132,21 +146,36 @@ pub fn load_package(
         }
     }
 
-    // 9. Discover optional exports: ferrum_mod_tick
+    // 9. Discover optional exports
     let tick_callback: Option<unsafe extern "C" fn(u64)> = unsafe {
-        library
-            .get::<unsafe extern "C" fn(u64)>(b"ferrum_mod_tick")
-            .ok()
-            .map(|sym| *sym.into_raw())
+        library.get::<unsafe extern "C" fn(u64)>(b"ferrum_mod_tick")
+            .ok().map(|sym| *sym.into_raw())
+    };
+    let server_start_callback: Option<unsafe extern "C" fn()> = unsafe {
+        library.get::<unsafe extern "C" fn()>(b"ferrum_mod_server_start")
+            .ok().map(|sym| *sym.into_raw())
+    };
+    let server_stop_callback: Option<unsafe extern "C" fn()> = unsafe {
+        library.get::<unsafe extern "C" fn()>(b"ferrum_mod_server_stop")
+            .ok().map(|sym| *sym.into_raw())
     };
 
     if tick_callback.is_some() {
-        eprintln!(
-            "[Ferrum]   Discovered optional export: ferrum_mod_tick"
-        );
+        eprintln!("[Ferrum]   Optional: ferrum_mod_tick");
+    }
+    if server_start_callback.is_some() {
+        eprintln!("[Ferrum]   Optional: ferrum_mod_server_start");
+    }
+    if server_stop_callback.is_some() {
+        eprintln!("[Ferrum]   Optional: ferrum_mod_server_stop");
     }
 
     // 10. Track
+    let exports = ModExports {
+        tick_callback,
+        server_start_callback,
+        server_stop_callback,
+    };
     let name = manifest.package.name.clone();
     registry.insert(
         name.clone(),
@@ -154,12 +183,14 @@ pub fn load_package(
             manifest,
             library,
             temp_dir,
-            tick_callback,
+            tick_callback: exports.tick_callback,
+            server_start_callback: exports.server_start_callback,
+            server_stop_callback: exports.server_stop_callback,
         },
     );
 
     eprintln!("[Ferrum] Loaded mod: {name}");
-    Ok((name, tick_callback))
+    Ok((name, exports))
 }
 
 // ─── Helpers ──────────────────────────────────

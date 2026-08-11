@@ -2,15 +2,19 @@ package com.ferrum.host;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.stream.Stream;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.MinecraftServer;
 
@@ -33,6 +37,9 @@ public class FerrumMod implements ModInitializer {
 
     /** Must match {@code abi::ABI_VERSION} in runtime-rs/src/abi/mod.rs. */
     private static final int ABI_VERSION = 0x0001_0000;
+
+    /** Current Minecraft server instance (set during lifecycle events). */
+    private static MinecraftServer currentServer;
 
     // ─── ModInitializer ─────────────────────────
 
@@ -131,6 +138,30 @@ public class FerrumMod implements ModInitializer {
             }
         });
 
+        // 8. Bind lifecycle dispatch functions
+        try {
+            MethodHandle dispatchStart = bridge.downcall("ferrum_dispatch_server_start",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG));
+            MethodHandle dispatchStop = bridge.downcall("ferrum_dispatch_server_stop",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG));
+
+            ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+                currentServer = server;
+                // Register host API (upcalls) now that the server is live
+                registerHostApi(bridge, rtHandle);
+                try { dispatchStart.invokeExact(rtHandle); }
+                catch (Throwable e) { LOG.error("server_start dispatch: {}", e.getMessage()); }
+            });
+            ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+                try { dispatchStop.invokeExact(rtHandle); }
+                catch (Throwable e) { LOG.error("server_stop dispatch: {}", e.getMessage()); }
+            });
+
+            LOG.info("Lifecycle events registered (start/stop).");
+        } catch (Throwable e) {
+            LOG.warn("Lifecycle dispatch unavailable: {}", e.getMessage());
+        }
+
         LOG.info("Ferrum ready. {} mod(s) loaded. Tick dispatch active.",
                 ferrumModCount(bridge, runtimeHandle));
     }
@@ -170,6 +201,44 @@ public class FerrumMod implements ModInitializer {
             return (long) count.invokeExact();
         } catch (Throwable e) {
             return -1;
+        }
+    }
+
+    // ─── Host API (Upcalls: Rust → Java) ────────
+
+    /** Called by the Rust runtime via upcall to get the online player count. */
+    private static int getPlayerCount() {
+        if (currentServer == null) return 0;
+        return currentServer.getPlayerManager().getPlayerList().size();
+    }
+
+    private static void registerHostApi(PanamaBridge bridge, long runtimeHandle) {
+        try {
+            Linker linker = Linker.nativeLinker();
+
+            // Create upcall stub: () -> int (getPlayerCount)
+            MethodHandle playerCountHandle = MethodHandles.lookup()
+                    .findStatic(FerrumMod.class, "getPlayerCount",
+                            MethodType.methodType(int.class));
+            MemorySegment playerCountStub = linker.upcallStub(
+                    playerCountHandle,
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT),
+                    Arena.global());
+
+            // Build the vtable struct in off-heap memory
+            MemorySegment vtable = Arena.global().allocate(8); // one pointer
+            vtable.set(ValueLayout.ADDRESS, 0, playerCountStub);
+
+            // Pass to Rust
+            MethodHandle registerApi = bridge.downcall("ferrum_register_host_api",
+                    FunctionDescriptor.ofVoid(
+                            ValueLayout.JAVA_LONG,   // runtime_handle
+                            ValueLayout.ADDRESS));   // vtable_ptr
+            registerApi.invokeExact(runtimeHandle, vtable);
+
+            LOG.info("Host API registered (upcalls active).");
+        } catch (Throwable e) {
+            LOG.error("Failed to register host API: {}", e.getMessage(), e);
         }
     }
 }

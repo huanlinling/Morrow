@@ -4,7 +4,9 @@
 //! All public symbols are `extern "C"` and use the platform C ABI.
 
 mod abi;
+mod error;
 mod event;
+mod host_api;
 mod mod_loader;
 mod panic;
 mod runtime;
@@ -154,20 +156,32 @@ pub extern "C" fn ferrum_load_mod(
         match MOD_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
             Some(registry) => {
                 match mod_loader::load_package(package_path, registry) {
-                    Ok((name, tick_cb)) => {
-                        if let Some(cb) = tick_cb {
-                            if let Some(tick_reg) = TICK_REGISTRIES
-                                .lock().unwrap().get_mut(&handle.as_u64())
-                            {
-                                tick_reg.register(&name, cb);
+                    Ok((name, exports)) => {
+                        if let Some(cb) = exports.tick_callback {
+                            if let Some(reg) = TICK_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
+                                reg.register(&name, cb);
                                 eprintln!("[Ferrum]   Registered tick callback for '{name}'");
                             }
                         }
+                        if let Some(cb) = exports.server_start_callback {
+                            if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
+                                reg.server_start.insert(name.clone(), cb);
+                                eprintln!("[Ferrum]   Registered server_start for '{name}'");
+                            }
+                        }
+                        if let Some(cb) = exports.server_stop_callback {
+                            if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
+                                reg.server_stop.insert(name.clone(), cb);
+                                eprintln!("[Ferrum]   Registered server_stop for '{name}'");
+                            }
+                        }
+
                         eprintln!("[Ferrum] Mod '{name}' loaded successfully");
                         abi::RESULT_OK
                     }
                     Err(e) => {
                         eprintln!("[Ferrum] Failed to load mod: {e}");
+                        record_error(handle.as_u64(), format!("ferrum_load_mod: {e}"));
                         abi::RESULT_ERR_UNKNOWN
                     }
                 }
@@ -213,14 +227,76 @@ static MOD_REGISTRIES: LazyLock<Mutex<HashMap<u64, ModRegistry>>> =
 static TICK_REGISTRIES: LazyLock<Mutex<HashMap<u64, TickRegistry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+static LIFECYCLE_REGISTRIES: LazyLock<Mutex<HashMap<u64, LifecycleRegistry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+static ERROR_CHANNELS: LazyLock<Mutex<HashMap<u64, error::ErrorChannel>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+static HOST_APIS: LazyLock<Mutex<HashMap<u64, host_api::HostApi>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Per-runtime lifecycle callbacks.
+pub struct LifecycleRegistry {
+    pub server_start: HashMap<String, unsafe extern "C" fn()>,
+    pub server_stop: HashMap<String, unsafe extern "C" fn()>,
+}
+
 fn register_mod_registry(handle: u64) {
     MOD_REGISTRIES.lock().unwrap().insert(handle, ModRegistry::new());
     TICK_REGISTRIES.lock().unwrap().insert(handle, TickRegistry::new());
+    LIFECYCLE_REGISTRIES.lock().unwrap().insert(handle, LifecycleRegistry {
+        server_start: HashMap::new(),
+        server_stop: HashMap::new(),
+    });
+    ERROR_CHANNELS.lock().unwrap().insert(handle, error::ErrorChannel::new());
+    HOST_APIS.lock().unwrap().insert(handle, host_api::HostApi::new());
 }
 
 fn remove_mod_registry(handle: u64) -> Option<ModRegistry> {
     TICK_REGISTRIES.lock().unwrap().remove(&handle);
+    LIFECYCLE_REGISTRIES.lock().unwrap().remove(&handle);
+    ERROR_CHANNELS.lock().unwrap().remove(&handle);
     MOD_REGISTRIES.lock().unwrap().remove(&handle)
+}
+
+/// Register the Java host function table (upcall stubs).
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_register_host_api(
+    runtime_handle: u64,
+    vtable_ptr: *const host_api::HostVtable,
+) {
+    panic::ffi_boundary((), || {
+        if vtable_ptr.is_null() { return; }
+        if let Some(api) = HOST_APIS.lock().unwrap().get(&runtime_handle) {
+            api.set_vtable(vtable_ptr);
+            eprintln!("[Ferrum] Host API registered");
+        }
+    })
+}
+
+/// Get the online player count via Java upcall.
+///
+/// If `runtime_handle` is 0, uses the first available runtime.
+/// Returns -1 if the host API isn't registered yet.
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_get_player_count(runtime_handle: u64) -> i32 {
+    panic::ffi_boundary(-1, || {
+        let apis = HOST_APIS.lock().unwrap();
+        let api = if runtime_handle == 0 {
+            apis.values().next()
+        } else {
+            apis.get(&runtime_handle)
+        };
+        api.and_then(|a| a.get_player_count()).unwrap_or(-1)
+    })
+}
+
+/// Record an error for a runtime (used internally by lifecycle operations).
+fn record_error(handle: u64, msg: impl Into<String>) {
+    if let Some(ch) = ERROR_CHANNELS.lock().unwrap().get(&handle) {
+        ch.push(msg);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,5 +313,91 @@ pub extern "C" fn ferrum_handle_count() -> u64 {
 pub extern "C" fn ferrum_mod_count() -> u64 {
     panic::ffi_boundary(0, || {
         MOD_REGISTRIES.lock().unwrap().values().map(|r| r.len()).sum::<usize>() as u64
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle dispatch
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_dispatch_server_start(runtime_handle: u64) {
+    panic::ffi_boundary((), || {
+        if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get(&runtime_handle) {
+            for (name, cb) in &reg.server_start {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    unsafe { cb() };
+                }));
+                if let Err(p) = result {
+                    eprintln!("[Ferrum] Mod '{name}' panicked in server_start: {:?}",
+                        p.downcast_ref::<&str>().unwrap_or(&"<unknown>"));
+                }
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_dispatch_server_stop(runtime_handle: u64) {
+    panic::ffi_boundary((), || {
+        if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get(&runtime_handle) {
+            for (_name, cb) in &reg.server_stop {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    unsafe { cb() };
+                }));
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Error Channel
+// ---------------------------------------------------------------------------
+
+/// Get the handle of the oldest pending error, or 0 if no errors.
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_last_error(runtime_handle: u64) -> u64 {
+    panic::ffi_boundary(0, || {
+        ERROR_CHANNELS
+            .lock().unwrap()
+            .get(&runtime_handle)
+            .and_then(|ch| ch.peek())
+            .map(|e| e.id)
+            .unwrap_or(0)
+    })
+}
+
+/// Read an error message into the provided buffer.
+///
+/// Returns the number of bytes written (excluding null terminator),
+/// or 0 if the error handle is not found.
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_error_message(
+    error_handle: u64,
+    runtime_handle: u64,
+    buffer_ptr: *mut u8,
+    buffer_cap: u32,
+) -> u32 {
+    panic::ffi_boundary(0, || {
+        let channels = ERROR_CHANNELS.lock().unwrap();
+        let ch = match channels.get(&runtime_handle) {
+            Some(ch) => ch,
+            None => return 0,
+        };
+
+        let record = match ch.take(error_handle) {
+            Some(r) => r,
+            None => return 0,
+        };
+
+        let msg = record.message;
+        let bytes = msg.as_bytes();
+        let len = bytes.len().min(buffer_cap as usize);
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_ptr, len);
+        }
+
+        len as u32
     })
 }
