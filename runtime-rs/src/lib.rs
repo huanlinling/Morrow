@@ -618,20 +618,55 @@ pub extern "C" fn morrow_dispatch_command(
 // Event dispatch: BlockBreak, BlockPlace, PlayerDeath
 // ---------------------------------------------------------------------------
 
-macro_rules! dispatch_two_str_event {
-    ($name:ident, $field:ident) => {
+macro_rules! dispatch_event {
+    ($name:ident, $field:ident, $arg:ident) => {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $name(runtime_handle: u64, ptr: *const u8, len: u32) {
+            panic::ffi_boundary((), || {
+                // Check which mods are quarantined (clone set to avoid holding lock)
+                let quarantined: std::collections::HashSet<String> = QUARANTINES
+                    .lock().unwrap().get(&runtime_handle)
+                    .map(|q| q.quarantined.lock().unwrap().clone())
+                    .unwrap_or_default();
+                if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
+                    for (mod_name, cb) in &cbs.$field {
+                        if quarantined.contains(mod_name) { continue; }
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                            cb(ptr, len);
+                        }));
+                        if result.is_err() {
+                            eprintln!("[Morrow] Mod '{mod_name}' panicked, quarantining");
+                            if let Some(q) = QUARANTINES.lock().unwrap().get(&runtime_handle) {
+                                q.add(mod_name);
+                            }
+                        }
+                    }
+                }
+            })
+        }
+    };
+    ($name:ident, $field:ident, $a1:ident, $a2:ident) => {
         #[unsafe(no_mangle)]
         pub extern "C" fn $name(
-            runtime_handle: u64,
-            s1_ptr: *const u8, s1_len: u32,
-            s2_ptr: *const u8, s2_len: u32,
+            runtime_handle: u64, p1: *const u8, l1: u32, p2: *const u8, l2: u32,
         ) {
             panic::ffi_boundary((), || {
+                let quarantined: std::collections::HashSet<String> = QUARANTINES
+                    .lock().unwrap().get(&runtime_handle)
+                    .map(|q| q.quarantined.lock().unwrap().clone())
+                    .unwrap_or_default();
                 if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
-                    for (_mod_name, cb) in &cbs.$field {
-                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                            cb(s1_ptr, s1_len, s2_ptr, s2_len);
+                    for (mod_name, cb) in &cbs.$field {
+                        if quarantined.contains(mod_name) { continue; }
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                            cb(p1, l1, p2, l2);
                         }));
+                        if result.is_err() {
+                            eprintln!("[Morrow] Mod '{mod_name}' panicked, quarantining");
+                            if let Some(q) = QUARANTINES.lock().unwrap().get(&runtime_handle) {
+                                q.add(mod_name);
+                            }
+                        }
                     }
                 }
             })
@@ -639,67 +674,14 @@ macro_rules! dispatch_two_str_event {
     };
 }
 
-dispatch_two_str_event!(morrow_dispatch_block_break, block_break);
-dispatch_two_str_event!(morrow_dispatch_block_place, block_place);
-dispatch_two_str_event!(morrow_dispatch_player_death, player_death);
+dispatch_event!(morrow_dispatch_player_join, player_join, ptr);
+dispatch_event!(morrow_dispatch_player_leave, player_leave, ptr);
+dispatch_event!(morrow_dispatch_chat_message, chat_message, p1, p2);
+dispatch_event!(morrow_dispatch_block_break, block_break, p1, p2);
+dispatch_event!(morrow_dispatch_block_place, block_place, p1, p2);
+dispatch_event!(morrow_dispatch_player_death, player_death, p1, p2);
 
-// ---------------------------------------------------------------------------
-// Event dispatch: PlayerJoin, PlayerLeave, Chat
-// ---------------------------------------------------------------------------
-
-#[unsafe(no_mangle)]
-pub extern "C" fn morrow_dispatch_player_join(
-    runtime_handle: u64,
-    name_ptr: *const u8,
-    name_len: u32,
-) {
-    panic::ffi_boundary((), || {
-        if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
-            for (mod_name, cb) in &cbs.player_join {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                    cb(name_ptr, name_len);
-                }));
-            }
-        }
-    })
-}
-
-// Same pattern for player_leave and chat_message...
-#[unsafe(no_mangle)]
-pub extern "C" fn morrow_dispatch_player_leave(
-    runtime_handle: u64,
-    name_ptr: *const u8,
-    name_len: u32,
-) {
-    panic::ffi_boundary((), || {
-        if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
-            for (_mod_name, cb) in &cbs.player_leave {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                    cb(name_ptr, name_len);
-                }));
-            }
-        }
-    })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn morrow_dispatch_chat_message(
-    runtime_handle: u64,
-    player_ptr: *const u8, player_len: u32,
-    msg_ptr: *const u8, msg_len: u32,
-) {
-    panic::ffi_boundary((), || {
-        if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
-            for (_mod_name, cb) in &cbs.chat_message {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                    cb(player_ptr, player_len, msg_ptr, msg_len);
-                }));
-            }
-        }
-    })
-}
-
-// ---------------------------------------------------------------------------
+// Events generated via dispatch_event! macro above
 // Lifecycle dispatch
 // ---------------------------------------------------------------------------
 

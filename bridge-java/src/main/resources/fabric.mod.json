@@ -1,33 +1,21 @@
 {
     "schemaVersion": 1,
-    "id": "morrow-host",
+    "id": "morrow",
     "version": "${version}",
-    "name": "Morrow Host",
-    "description": "Morrow Native Runtime Platform — Fabric host adapter. Loads the Rust runtime and dispatches events to native mods.",
+    "name": "Morrow",
+    "description": "Native Minecraft Mod Loader — Rust runtime + .morrow mods via Panama FFI",
     "authors": ["Morrow Contributors"],
-    "contact": {
-        "homepage": "https://github.com/morrow-mc/morrow",
-        "sources": "https://github.com/morrow-mc/morrow"
-    },
     "license": "MIT",
     "environment": "*",
-    "entrypoints": {
-        "main": [
-            "com.morrow.host.MorrowMod"
-        ]
-    },
+    "mixins": [
+        "morrow.mixins.json"
+    ],
     "depends": {
-        "fabricloader": ">=0.16.0",
-        "minecraft": ">=1.20.1",
         "java": ">=21"
     },
     "custom": {
         "morrow": {
-            "abi_version": 65536,
-            "native": {
-                "linux-x86_64": "natives/linux-x86_64/libmorrow_runtime.so",
-                "windows-x86_64": "natives/windows-x86_64/morrow_runtime.dll"
-            }
+            "abi_version": 65536
         }
     }
 }

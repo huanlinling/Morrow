@@ -191,7 +191,7 @@ pub struct ModEventCallbacks {
 // ---------------------------------------------------------------------------
 
 pub struct Quarantine {
-    quarantined: Mutex<HashSet<String>>,
+    pub(crate) quarantined: Mutex<HashSet<String>>,
 }
 
 impl Quarantine {
