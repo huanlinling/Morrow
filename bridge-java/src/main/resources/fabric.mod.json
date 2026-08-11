@@ -1,0 +1,33 @@
+{
+    "schemaVersion": 1,
+    "id": "ferrum-host",
+    "version": "${version}",
+    "name": "Ferrum Host",
+    "description": "Ferrum Native Runtime Platform — Fabric host adapter. Loads the Rust runtime and dispatches events to native mods.",
+    "authors": ["Ferrum Contributors"],
+    "contact": {
+        "homepage": "https://github.com/ferrum-mc/ferrum",
+        "sources": "https://github.com/ferrum-mc/ferrum"
+    },
+    "license": "MIT",
+    "environment": "*",
+    "entrypoints": {
+        "main": [
+            "com.ferrum.host.FerrumMod"
+        ]
+    },
+    "depends": {
+        "fabricloader": ">=0.16.0",
+        "minecraft": ">=1.20.1",
+        "java": ">=21"
+    },
+    "custom": {
+        "ferrum": {
+            "abi_version": 65536,
+            "native": {
+                "linux-x86_64": "natives/linux-x86_64/libferrum_runtime.so",
+                "windows-x86_64": "natives/windows-x86_64/ferrum_runtime.dll"
+            }
+        }
+    }
+}

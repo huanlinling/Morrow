@@ -1,0 +1,19 @@
+# Rust
+target/
+
+# Java / Gradle
+bridge-java/out/
+bridge-java/build/
+bridge-java/.gradle/
+bridge-java/run/
+*.class
+*.jar
+!bridge-java/gradle/wrapper/gradle-wrapper.jar
+
+# Ferrum packages (built artifacts)
+*.ferrum
+
+# IDE
+.idea/
+.vscode/
+*.iml

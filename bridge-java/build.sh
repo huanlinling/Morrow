@@ -1,0 +1,39 @@
+#!/bin/bash
+# Ferrum Java Bridge — Build & Test
+# Requires: JDK 21 (Panama FFM is preview), Rust stable
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+OUT_DIR="$SCRIPT_DIR/out"
+
+echo "==> Step 1: Build Rust runtime..."
+cd "$PROJECT_ROOT"
+cargo build --release
+echo "    Rust build OK."
+
+echo ""
+echo "==> Step 2: Compile Java sources..."
+cd "$SCRIPT_DIR"
+rm -rf "$OUT_DIR"
+javac --release 21 --enable-preview \
+    -d "$OUT_DIR" \
+    src/main/java/com/ferrum/host/PanamaBridge.java \
+    src/test/java/com/ferrum/host/M0_AddTest.java \
+    src/test/java/com/ferrum/host/M1_LifecycleTest.java
+echo "    Java compile OK."
+
+echo ""
+echo "==> Step 3: M0 Regression Test..."
+java --enable-preview --enable-native-access=ALL-UNNAMED \
+    -cp "$OUT_DIR" \
+    com.ferrum.host.M0_AddTest
+
+echo ""
+echo "==> Step 4: M1 Lifecycle Test..."
+java --enable-preview --enable-native-access=ALL-UNNAMED \
+    -cp "$OUT_DIR" \
+    com.ferrum.host.M1_LifecycleTest
+
+echo ""
+echo "==> All tests passed."

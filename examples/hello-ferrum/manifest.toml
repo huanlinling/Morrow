@@ -1,0 +1,12 @@
+[package]
+name = "hello-ferrum"
+version = "0.1.0"
+description = "The simplest possible Ferrum mod"
+authors = ["Ferrum Contributors"]
+license = "MIT"
+
+[ferrum]
+api_version = 1
+
+[entry]
+symbol = "ferrum_mod_init"
