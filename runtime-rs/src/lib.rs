@@ -467,6 +467,39 @@ pub extern "C" fn ferrum_get_world_time(runtime_handle: u64) -> i64 {
 }
 
 // ---------------------------------------------------------------------------
+// Capability negotiation
+// ---------------------------------------------------------------------------
+
+/// Built-in capabilities and their versions.
+static CAPABILITIES: LazyLock<HashMap<&'static str, u32>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+    m.insert("event_bus", 1u32);
+    m.insert("commands", 1u32);
+    m.insert("host_api", 1u32);
+    m.insert("config", 1u32);
+    m.insert("lifecycle", 1u32);
+    m.insert("player_events", 1u32);
+    m.insert("block_events", 1u32);
+    m.insert("panic_isolation", 1u32);
+    m
+});
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_request_capability(
+    _runtime_handle: u64,
+    cap_ptr: *const u8,
+    cap_len: u32,
+) -> u32 {
+    panic::ffi_boundary(0, || {
+        let cap = unsafe {
+            let bytes = std::slice::from_raw_parts(cap_ptr, cap_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("")
+        };
+        CAPABILITIES.get(cap).copied().unwrap_or(0)
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 

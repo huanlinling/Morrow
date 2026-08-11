@@ -21,6 +21,8 @@ pub struct RuntimeApi {
     pub get_world_time: unsafe extern "C" fn(runtime_handle: u64) -> i64,
     /// Read the mod's config.toml. Returns bytes written, 0 if no config.
     pub get_config: unsafe extern "C" fn(runtime_handle: u64, mod_name_ptr: *const u8, mod_name_len: u32, buf: *mut u8, buf_cap: u32) -> u32,
+    /// Request a capability version. Returns version (1, 2, ...) or 0 if unavailable.
+    pub request_capability: unsafe extern "C" fn(runtime_handle: u64, cap_ptr: *const u8, cap_len: u32) -> u32,
 }
 
 impl RuntimeApi {
@@ -33,6 +35,7 @@ impl RuntimeApi {
             execute_command: crate::ferrum_execute_command,
             get_world_time: crate::ferrum_get_world_time,
             get_config: crate::ferrum_get_mod_config,
+            request_capability: crate::ferrum_request_capability,
         }
     }
 }

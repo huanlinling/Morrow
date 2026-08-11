@@ -10,14 +10,18 @@ static mut API: Option<RuntimeApi> = None;
 fn init(_ctx: &mut Context, api: *const RuntimeApi) -> Result<(), FerrumError> {
     let a = unsafe { api.read() };
 
+    // Check capabilities
+    let caps: &[&[u8]] = &[b"commands", b"host_api", b"config", b"magic"];
+    for &cap in caps {
+        let cap_name = std::str::from_utf8(cap).unwrap();
+        let ver = unsafe { (a.request_capability)(0, cap.as_ptr(), cap.len() as u32) };
+        if ver > 0 {
+            ferrum::info!("Capability {}: v{}", cap_name, ver);
+        }
+    }
+
     // Read config
     let mut cbuf = [0u8; 512];
-    let name = b"hello-ferrum";
-    let n = unsafe { (a.get_config)(0, name.as_ptr(), name.len() as u32, cbuf.as_mut_ptr(), cbuf.len() as u32) };
-    if n > 0 {
-        let cfg = std::str::from_utf8(&cbuf[..n as usize]).unwrap_or("");
-        ferrum::info!("Config loaded: {}", cfg.lines().next().unwrap_or(""));
-    }
 
     unsafe {
         (a.register_command)(0, b"ferrum".as_ptr(), 6, ferrum_cmd);
