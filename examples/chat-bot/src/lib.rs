@@ -2,18 +2,18 @@
 //!
 //! Demonstrates: chat events, send_message, commands.
 
-use ferrum::prelude::*;
+use morrow::prelude::*;
 
 static mut API: Option<RuntimeApi> = None;
 
-#[ferrum::mod_main]
-fn init(_ctx: &mut Context, api: *const RuntimeApi) -> Result<(), FerrumError> {
+#[morrow::mod_main]
+fn init(_ctx: &mut Context, api: *const RuntimeApi) -> Result<(), MorrowError> {
     let a = unsafe { api.read() };
     unsafe {
         (a.register_command)(0, b"ping".as_ptr(), 4, ping_cmd);
         API = Some(a);
     }
-    ferrum::info!("Chat bot online! Say hi or /ping");
+    morrow::info!("Chat bot online! Say hi or /ping");
     Ok(())
 }
 
@@ -25,7 +25,7 @@ unsafe extern "C" fn ping_cmd(_: *const u8, _: u32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_mod_player_join(name_ptr: *const u8, name_len: u32) {
+pub extern "C" fn morrow_mod_player_join(name_ptr: *const u8, name_len: u32) {
     let name = unsafe {
         let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
         String::from_utf8_lossy(bytes)
@@ -38,7 +38,7 @@ pub extern "C" fn ferrum_mod_player_join(name_ptr: *const u8, name_len: u32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_mod_chat_message(
+pub extern "C" fn morrow_mod_chat_message(
     player_ptr: *const u8, player_len: u32,
     msg_ptr: *const u8, msg_len: u32,
 ) {
@@ -54,8 +54,8 @@ pub extern "C" fn ferrum_mod_chat_message(
     if let Some(ref api) = unsafe { API.as_ref() } {
         let reply: Option<&str> = if msg.contains("hello") || msg.contains("hi") {
             Some("Hello there!")
-        } else if msg.contains("ferrum") {
-            Some("Ferrum is awesome! 🦀")
+        } else if msg.contains("morrow") {
+            Some("Morrow is awesome! 🦀")
         } else if msg.contains("time") {
             let t = unsafe { (api.get_world_time)(0) };
             return send(api, format!("World time: {} ticks", t));

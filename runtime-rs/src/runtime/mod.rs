@@ -1,4 +1,4 @@
-//! Runtime kernel — the heart of Ferrum.
+//! Runtime kernel — the heart of Morrow.
 //!
 //! Holds the runtime state and will eventually own the mod registry,
 //! event bus, and capability table (added in later milestones).
@@ -7,9 +7,9 @@ pub mod state;
 
 use state::RuntimeState;
 
-/// The Ferrum Runtime kernel.
+/// The Morrow Runtime kernel.
 ///
-/// Created by `ferrum_init`, destroyed by `ferrum_shutdown`.
+/// Created by `morrow_init`, destroyed by `morrow_shutdown`.
 /// In Milestone 1 this is intentionally minimal — just the state
 /// machine. Mod registry, event bus, and capability system will
 /// be added in M3/M4/M5.
@@ -20,7 +20,7 @@ pub struct RuntimeKernel {
 impl RuntimeKernel {
     /// Create a new runtime kernel in the Ready state.
     ///
-    /// Called from `ferrum_init` after ABI version check passes.
+    /// Called from `morrow_init` after ABI version check passes.
     pub fn new() -> Self {
         RuntimeKernel {
             state: RuntimeState::Ready,

@@ -1,4 +1,4 @@
-//! Runtime API vtable — passed to mods during `ferrum_mod_init`.
+//! Runtime API vtable — passed to mods during `morrow_mod_init`.
 
 #[repr(C)]
 pub struct RuntimeApi {

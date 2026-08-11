@@ -1,8 +1,8 @@
 [package]
-name = "chat-bot"
+name = "hello-morrow"
 version = "0.1.0"
 edition = "2021"
-description = "Morrow chat bot example — responds to messages"
+description = "The simplest possible Morrow mod"
 
 [lib]
 crate-type = ["cdylib"]

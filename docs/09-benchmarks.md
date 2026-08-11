@@ -17,7 +17,7 @@ Within the 5-10 ns design target (Panama FFM spec).
 
 ## Tick Dispatch Latency
 
-Calling `ferrum_tick()` with an empty runtime (no mods loaded).
+Calling `morrow_tick()` with an empty runtime (no mods loaded).
 
 | Metric | Value |
 |--------|-------|
@@ -40,7 +40,7 @@ Calling `ferrum_tick()` with an empty runtime (no mods loaded).
 
 | Component | Approx Size |
 |-----------|-------------|
-| libferrum_runtime.so | ~2.2 MB (release, stripped) |
+| libmorrow_runtime.so | ~2.2 MB (release, stripped) |
 | Runtime kernel (idle) | ~1 KB (single handle entry) |
 | Per loaded mod | ~4 KB (registry entry + metadata) |
 

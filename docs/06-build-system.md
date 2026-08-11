@@ -2,12 +2,12 @@
 
 ## 开发环境（Docker）
 
-Ferrum 使用 Docker 提供完全隔离、可复现的开发环境。不依赖宿主机上的任何 JDK 或 Rust 安装。
+Morrow 使用 Docker 提供完全隔离、可复现的开发环境。不依赖宿主机上的任何 JDK 或 Rust 安装。
 
 ### 文件
 
 ```
-ferrum/
+morrow/
 ├── Dockerfile            # 基于 eclipse-temurin:21-jdk + Rust stable
 ├── docker-compose.yml    # 挂载源码 + 持久化 Cargo 缓存
 ├── .dockerignore         # 精简构建上下文
@@ -23,7 +23,7 @@ docker compose build
 # 进入开发环境
 docker compose run --rm dev
 # 你现在在一个安装了 JDK 21 + Rust 的容器里
-# /ferrum 目录就是你的项目源码（实时同步）
+# /morrow 目录就是你的项目源码（实时同步）
 
 # 直接在容器里跑命令
 docker compose run --rm dev cargo build --release
@@ -48,15 +48,15 @@ RUN curl ... rustup | sh             # Rust stable toolchain
 
 ```yaml
 volumes:
-  - .:/ferrum                        # 源码即时同步，修改无需 rebuild
+  - .:/morrow                        # 源码即时同步，修改无需 rebuild
   - cargo-registry:/root/.cargo/registry  # crate 缓存持久化
   - cargo-git:/root/.cargo/git            # git 依赖缓存
-  - cargo-target:/ferrum/runtime-rs/target # 编译缓存持久化
+  - cargo-target:/morrow/runtime-rs/target # 编译缓存持久化
 ```
 
 三个 Cargo 缓存 volume 是关键 — 否则每次 `docker compose run` 都是全新容器，`cargo build` 要从头下载编译所有依赖，浪费大量时间。
 
-### 为什么 Docker 适合 Ferrum
+### 为什么 Docker 适合 Morrow
 
 | 问题 | Docker 怎么解决 |
 |------|----------------|
@@ -70,13 +70,13 @@ volumes:
 
 ```
 ┌─────────────────────────────────────┐
-│            Ferrum Build              │
+│            Morrow Build              │
 │                                      │
 │  Rust       Java          Package    │
-│  Cargo      Gradle+Loom   Ferrum CLI │
+│  Cargo      Gradle+Loom   Morrow CLI │
 │    │           │              │       │
 │    ▼           ▼              ▼       │
-│  .so/.dll   .jar           .ferrum   │
+│  .so/.dll   .jar           .morrow   │
 │  (cdylib)   (Fabric mod)   (ZIP)     │
 └─────────────────────────────────────┘
 ```
@@ -86,22 +86,22 @@ volumes:
 ### workspace Cargo.toml
 
 ```toml
-# ferrum/Cargo.toml
+# morrow/Cargo.toml
 [workspace]
 resolver = "2"
 members = [
     "runtime-rs",
     "sdk-rs",
-    "sdk-rs/ferrum-macros",
-    "examples/hello-ferrum",
-    "ferrum-cli",
+    "sdk-rs/morrow-macros",
+    "examples/hello-morrow",
+    "morrow-cli",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/ferrum-mc/ferrum"
+repository = "https://github.com/morrow-mc/morrow"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -117,13 +117,13 @@ toml = "0.8"
 
 ```toml
 [package]
-name = "ferrum-runtime"
+name = "morrow-runtime"
 version.workspace = true
 edition.workspace = true
 
 [lib]
 crate-type = ["cdylib"]    # 编译为 .so/.dll
-name = "ferrum_runtime"    # 输出: libferrum_runtime.so
+name = "morrow_runtime"    # 输出: libmorrow_runtime.so
 
 [dependencies]
 # 最小依赖原则 — runtime 要尽可能轻量
@@ -147,26 +147,26 @@ strip = "symbols"          # 减小 .so 体积
 
 ```toml
 [package]
-name = "ferrum"
+name = "morrow"
 version.workspace = true
 edition.workspace = true
 
 [lib]
 crate-type = ["rlib"]      # 静态链接到 mod 中
-name = "ferrum"
+name = "morrow"
 
 [dependencies]
-ferrum-macros = { path = "ferrum-macros" }
+morrow-macros = { path = "morrow-macros" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 ```
 
-### ferrum-macros/Cargo.toml
+### morrow-macros/Cargo.toml
 
 ```toml
 [package]
-name = "ferrum-macros"
+name = "morrow-macros"
 version.workspace = true
 edition.workspace = true
 
@@ -249,8 +249,8 @@ loader_version=0.16.5
 fabric_version=0.92.0+1.20.1
 
 mod_version=0.1.0
-maven_group=com.ferrum
-archives_base_name=ferrum-host
+maven_group=com.morrow
+archives_base_name=morrow-host
 ```
 
 ## 构建流程
@@ -261,22 +261,22 @@ archives_base_name=ferrum-host
 # 1. 构建 Rust runtime
 cd runtime-rs
 cargo build --release
-# → target/release/libferrum_runtime.so
+# → target/release/libmorrow_runtime.so
 
 # 2. 构建 Java bridge（自动复制 .so）
 cd bridge-java/fabric-host
 ./gradlew build
-# → build/libs/ferrum-host-0.1.0.jar
+# → build/libs/morrow-host-0.1.0.jar
 
 # 3. 构建示例 mod
-cd examples/hello-ferrum
+cd examples/hello-morrow
 cargo build --release
-# → target/release/libhello_ferrum.so
+# → target/release/libhello_morrow.so
 
-# 4. 打包为 .ferrum
+# 4. 打包为 .morrow
 cd ../..
-cargo run --bin ferrum-cli -- package ./examples/hello-ferrum
-# → hello-ferrum.ferrum
+cargo run --bin morrow-cli -- package ./examples/hello-morrow
+# → hello-morrow.morrow
 ```
 
 ### CI 构建（全自动）
@@ -320,19 +320,19 @@ jobs:
 ```bash
 # 只改 Rust runtime
 cd runtime-rs && cargo build --release
-cp target/release/libferrum_runtime.so \
-   ~/.minecraft/mods/ferrum/native/linux-x86_64/
+cp target/release/libmorrow_runtime.so \
+   ~/.minecraft/mods/morrow/native/linux-x86_64/
 # 重启 Minecraft
 
 # 只改 SDK
 cd sdk-rs && cargo build
-cd examples/hello-ferrum && cargo build --release
-ferrum-cli package . --output ~/.minecraft/mods/
+cd examples/hello-morrow && cargo build --release
+morrow-cli package . --output ~/.minecraft/mods/
 # 重启 Minecraft
 
 # 只改 Java bridge
 cd bridge-java/fabric-host && ./gradlew build
-cp build/libs/ferrum-host-0.1.0.jar ~/.minecraft/mods/
+cp build/libs/morrow-host-0.1.0.jar ~/.minecraft/mods/
 # 重启 Minecraft
 ```
 
@@ -353,7 +353,7 @@ java -agentlib:native-debugger ... # 需要专门的 native 调试工具
 ## 版本管理
 
 ```
-Ferrum 版本号:
+Morrow 版本号:
   runtime-rs:   独立版本（遵循 semver）
   sdk-rs:       与 runtime 主版本同步
   bridge-java:  独立版本（Java 侧有自己的发布节奏）

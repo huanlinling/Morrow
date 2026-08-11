@@ -3,9 +3,9 @@
 //! Provides access to runtime capabilities. Currently minimal —
 //! will grow with event bus access, command registration, etc. in M5+.
 
-/// Execution context for a Ferrum mod.
+/// Execution context for a Morrow mod.
 ///
-/// Created by the runtime and passed to `ferrum_mod_init`.
+/// Created by the runtime and passed to `morrow_mod_init`.
 /// The mod uses this to register event listeners, access
 /// capabilities, and interact with the Minecraft server.
 pub struct Context {

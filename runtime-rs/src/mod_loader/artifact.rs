@@ -1,4 +1,4 @@
-//! Platform artifact selection for `.ferrum` packages.
+//! Platform artifact selection for `.morrow` packages.
 
 /// Identify the target platform for native artifact selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +16,7 @@ impl Platform {
         }
     }
 
-    /// Return the directory name inside a .ferrum package for this platform.
+    /// Return the directory name inside a .morrow package for this platform.
     ///
     /// Examples: "linux-x86_64", "windows-x86_64", "macos-aarch64".
     pub fn dir_name(&self) -> String {

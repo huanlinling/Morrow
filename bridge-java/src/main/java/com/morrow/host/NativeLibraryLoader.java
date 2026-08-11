@@ -1,4 +1,4 @@
-package com.ferrum.host;
+package com.morrow.host;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -12,7 +12,7 @@ import java.util.Locale;
  *
  * <p>Search order:
  * <ol>
- *   <li>{@code -Dferrum.native.dir} system property (dev: points at Cargo target/)</li>
+ *   <li>{@code -Dmorrow.native.dir} system property (dev: points at Cargo target/)</li>
  *   <li>JAR resources under {@code natives/<os>-<arch>/} (production)</li>
  *   <li>{@code java.library.path}</li>
  * </ol>
@@ -25,7 +25,7 @@ public final class NativeLibraryLoader {
     private NativeLibraryLoader() { /* static utility */ }
 
     /** Basename of the runtime library (no prefix/suffix). */
-    private static final String LIB_NAME = "ferrum_runtime";
+    private static final String LIB_NAME = "morrow_runtime";
 
     /**
      * Find and load the native runtime library.
@@ -35,11 +35,11 @@ public final class NativeLibraryLoader {
      */
     public static Path load() {
         // 1. Explicit dev override
-        String devDir = System.getProperty("ferrum.native.dir");
+        String devDir = System.getProperty("morrow.native.dir");
         if (devDir != null) {
             Path candidate = Path.of(devDir).resolve(mapLibraryName());
             if (Files.exists(candidate)) {
-                System.out.println("[Ferrum] Native: " + candidate + " (ferrum.native.dir)");
+                System.out.println("[Morrow] Native: " + candidate + " (morrow.native.dir)");
                 return candidate;
             }
         }
@@ -50,10 +50,10 @@ public final class NativeLibraryLoader {
                 .getClassLoader().getResourceAsStream(resourcePath)) {
             if (is != null) {
                 // Extract to a temp file so dlopen can load it
-                Path tmp = Files.createTempFile("ferrum_runtime_", "." + platformExtension());
+                Path tmp = Files.createTempFile("morrow_runtime_", "." + platformExtension());
                 tmp.toFile().deleteOnExit();
                 Files.copy(is, tmp, StandardCopyOption.REPLACE_EXISTING);
-                System.out.println("[Ferrum] Native: " + tmp + " (extracted from JAR: " + resourcePath + ")");
+                System.out.println("[Morrow] Native: " + tmp + " (extracted from JAR: " + resourcePath + ")");
                 return tmp;
             }
         } catch (IOException e) {
@@ -79,12 +79,12 @@ public final class NativeLibraryLoader {
         throw new UnsatisfiedLinkError(
                 "Cannot find " + mapLibraryName() + ". "
                 + "Build it first: cargo build --release. "
-                + "Or set -Dferrum.native.dir=<path>/target/release");
+                + "Or set -Dmorrow.native.dir=<path>/target/release");
     }
 
     // ─── Platform helpers ───────────────────────
 
-    /** Library filename: "libferrum_runtime.so" on Linux, "ferrum_runtime.dll" on Windows. */
+    /** Library filename: "libmorrow_runtime.so" on Linux, "morrow_runtime.dll" on Windows. */
     public static String mapLibraryName() {
         String os = osName();
         if (os.contains("win")) {

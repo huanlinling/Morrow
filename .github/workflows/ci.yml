@@ -111,11 +111,11 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Package hello-ferrum
+      - name: Package hello-morrow
         run: make package-hello
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hello-ferrum
-          path: hello-ferrum.ferrum
+          name: hello-morrow
+          path: hello-morrow.morrow

@@ -1,42 +1,42 @@
-//! Error type for Ferrum mods.
+//! Error type for Morrow mods.
 
 use std::fmt;
 
-/// Standard error type for Ferrum mod operations.
+/// Standard error type for Morrow mod operations.
 ///
 /// Returned from lifecycle hooks (`on_init`, `on_tick`, etc.)
 /// to signal failure to the runtime.
 #[derive(Debug)]
-pub struct FerrumError {
+pub struct MorrowError {
     message: String,
 }
 
-impl FerrumError {
+impl MorrowError {
     /// Create a new error with a message.
     pub fn new(msg: impl Into<String>) -> Self {
-        FerrumError {
+        MorrowError {
             message: msg.into(),
         }
     }
 }
 
-impl fmt::Display for FerrumError {
+impl fmt::Display for MorrowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FerrumError: {}", self.message)
+        write!(f, "MorrowError: {}", self.message)
     }
 }
 
-impl std::error::Error for FerrumError {}
+impl std::error::Error for MorrowError {}
 
 // Convenience conversions
-impl From<&str> for FerrumError {
+impl From<&str> for MorrowError {
     fn from(s: &str) -> Self {
-        FerrumError::new(s)
+        MorrowError::new(s)
     }
 }
 
-impl From<String> for FerrumError {
+impl From<String> for MorrowError {
     fn from(s: String) -> Self {
-        FerrumError::new(s)
+        MorrowError::new(s)
     }
 }

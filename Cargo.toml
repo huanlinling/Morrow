@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "runtime-rs",
     "sdk-rs",
-    "sdk-rs/ferrum-macros",
-    "examples/hello-ferrum",
+    "sdk-rs/morrow-macros",
+    "examples/hello-morrow",
     "examples/chat-bot",
 ]

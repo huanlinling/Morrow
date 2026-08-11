@@ -3,7 +3,7 @@
 ## ABI 版本
 
 ```rust
-/// Ferrum ABI version — 每次不兼容变更递增主版本
+/// Morrow ABI version — 每次不兼容变更递增主版本
 /// 兼容变更（新增函数）递增次版本
 pub const ABI_VERSION: u32 = 1;
 
@@ -24,7 +24,7 @@ pub fn is_abi_compatible(requested: u32, actual: u32) -> bool {
 
 ```c
 /**
- * 初始化 Ferrum Runtime
+ * 初始化 Morrow Runtime
  *
  * @param abi_version   调用者请求的 ABI 版本
  * @param config_ptr    指向配置 JSON 的指针（UTF-8, null-terminated）
@@ -33,32 +33,32 @@ pub fn is_abi_compatible(requested: u32, actual: u32) -> bool {
  *
  * 调用时机：JVM 启动后，Fabric 初始化完成时
  * 线程安全：应在主线程调用一次
- * 错误处理：失败返回 0，错误信息通过 ferrum_last_error 获取
+ * 错误处理：失败返回 0，错误信息通过 morrow_last_error 获取
  */
-uint64_t ferrum_init(uint32_t abi_version,
+uint64_t morrow_init(uint32_t abi_version,
                      uint64_t config_ptr,
                      uint32_t config_len);
 
 /**
- * 关闭 Ferrum Runtime
+ * 关闭 Morrow Runtime
  *
- * @param runtime_handle   ferrum_init 返回的 handle
+ * @param runtime_handle   morrow_init 返回的 handle
  * @return                 0 成功，非零错误码
  *
  * 调用时机：服务器关闭前
  * 副作用：卸载所有已加载 mod，释放所有资源
  */
-uint32_t ferrum_shutdown(uint64_t runtime_handle);
+uint32_t morrow_shutdown(uint64_t runtime_handle);
 ```
 
 ### Mod Management
 
 ```c
 /**
- * 加载一个 .ferrum 包
+ * 加载一个 .morrow 包
  *
  * @param runtime_handle
- * @param package_path     .ferrum 文件的文件系统路径（UTF-8）
+ * @param package_path     .morrow 文件的文件系统路径（UTF-8）
  * @param path_len          路径长度
  * @return                 mod_handle (u64), 0 表示加载失败
  *
@@ -70,7 +70,7 @@ uint32_t ferrum_shutdown(uint64_t runtime_handle);
  * 5. 调用 mod entry point
  * 6. 注册到 mod registry
  */
-uint64_t ferrum_load_mod(uint64_t runtime_handle,
+uint64_t morrow_load_mod(uint64_t runtime_handle,
                           uint64_t package_path,
                           uint32_t path_len);
 
@@ -78,10 +78,10 @@ uint64_t ferrum_load_mod(uint64_t runtime_handle,
  * 卸载一个 mod
  *
  * @param runtime_handle
- * @param mod_handle       ferrum_load_mod 返回的 handle
+ * @param mod_handle       morrow_load_mod 返回的 handle
  * @return                 0 成功
  */
-uint32_t ferrum_unload_mod(uint64_t runtime_handle,
+uint32_t morrow_unload_mod(uint64_t runtime_handle,
                             uint64_t mod_handle);
 ```
 
@@ -100,7 +100,7 @@ uint32_t ferrum_unload_mod(uint64_t runtime_handle,
  *
  * 线程安全：可从 Java 事件线程调用
  */
-uint32_t ferrum_dispatch_event(uint64_t runtime_handle,
+uint32_t morrow_dispatch_event(uint64_t runtime_handle,
                                 uint64_t event_type,
                                 uint32_t type_len,
                                 uint64_t event_data,
@@ -115,7 +115,7 @@ uint32_t ferrum_dispatch_event(uint64_t runtime_handle,
  * @param callback_addr    upcall stub 的内存地址
  * @return                 0 成功
  */
-uint32_t ferrum_register_upcall(uint64_t runtime_handle,
+uint32_t morrow_register_upcall(uint64_t runtime_handle,
                                  uint64_t event_type,
                                  uint32_t type_len,
                                  uint64_t callback_addr);
@@ -132,7 +132,7 @@ uint32_t ferrum_register_upcall(uint64_t runtime_handle,
  * 调用时机：每个 game tick（20 TPS）
  * 性能要求：必须在 <1ms 内返回
  */
-void ferrum_tick(uint64_t runtime_handle);
+void morrow_tick(uint64_t runtime_handle);
 ```
 
 ### Error Channel
@@ -144,17 +144,17 @@ void ferrum_tick(uint64_t runtime_handle);
  * @param runtime_handle
  * @return                 error_handle, 0 表示无错误
  */
-uint64_t ferrum_last_error(uint64_t runtime_handle);
+uint64_t morrow_last_error(uint64_t runtime_handle);
 
 /**
  * 获取错误消息
  *
- * @param error_handle     ferrum_last_error 返回的 handle
+ * @param error_handle     morrow_last_error 返回的 handle
  * @param buffer           输出缓冲区（调用者分配）
  * @param buffer_cap       缓冲区容量
  * @return                 实际写入的字节数（不含 null terminator）
  */
-uint32_t ferrum_error_message(uint64_t error_handle,
+uint32_t morrow_error_message(uint64_t error_handle,
                                uint64_t buffer,
                                uint32_t buffer_cap);
 
@@ -163,7 +163,7 @@ uint32_t ferrum_error_message(uint64_t error_handle,
  *
  * @param error_handle
  */
-void ferrum_error_free(uint64_t error_handle);
+void morrow_error_free(uint64_t error_handle);
 ```
 
 ### 资源管理
@@ -172,11 +172,11 @@ void ferrum_error_free(uint64_t error_handle);
 /**
  * 释放 handle（通用的 handle 析构）
  *
- * @param handle   任何由 Ferrum 分配的 handle
+ * @param handle   任何由 Morrow 分配的 handle
  *
- * 注意：runtime_handle 不通过此函数释放（使用 ferrum_shutdown）
+ * 注意：runtime_handle 不通过此函数释放（使用 morrow_shutdown）
  */
-void ferrum_handle_free(uint64_t handle);
+void morrow_handle_free(uint64_t handle);
 ```
 
 ## 数据结构约定

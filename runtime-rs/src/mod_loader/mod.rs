@@ -1,4 +1,4 @@
-//! Mod loader — reads `.ferrum` packages, selects platform artifacts,
+//! Mod loader — reads `.morrow` packages, selects platform artifacts,
 //! loads native libraries, and calls mod entry points.
 //!
 //! See docs/05-package-format.md and docs/03-lifecycle.md.
@@ -28,7 +28,7 @@ pub struct LoadedMod {
     /// Temp directory where the artifact was extracted (cleaned up on drop).
     #[allow(dead_code)]
     temp_dir: Option<tempfile::TempDir>,
-    /// Optional tick callback, discovered from `ferrum_mod_tick` export.
+    /// Optional tick callback, discovered from `morrow_mod_tick` export.
     #[allow(dead_code)]
     pub tick_callback: Option<unsafe extern "C" fn(u64)>,
     /// Optional lifecycle: server started.
@@ -75,7 +75,7 @@ impl ModRegistry {
 // Loader
 // ---------------------------------------------------------------------------
 
-/// Load a `.ferrum` package from a file path.
+/// Load a `.morrow` package from a file path.
 ///
 /// Steps:
 /// 1. Open the ZIP file
@@ -88,7 +88,7 @@ impl ModRegistry {
 /// 8. Call the entry point
 /// 9. Track the loaded mod in the registry
 ///
-/// Read config.toml from a .ferrum package without loading the mod.
+/// Read config.toml from a .morrow package without loading the mod.
 pub fn read_zip_config(package_path: &Path) -> Option<Vec<u8>> {
     let file = std::fs::File::open(package_path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
@@ -118,7 +118,7 @@ pub fn load_package(
         .map_err(|e| format!("cannot open {}: {e}", package_path.display()))?;
 
     let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("invalid .ferrum package: {e}"))?;
+        .map_err(|e| format!("invalid .morrow package: {e}"))?;
 
     // 2. Read manifest.toml
     let manifest_contents = read_zip_entry(&mut archive, "manifest.toml")?;
@@ -128,7 +128,7 @@ pub fn load_package(
     let config_data = read_zip_entry_optional(&mut archive, "config.toml");
 
     eprintln!(
-        "[Ferrum] Loading mod: {} v{}",
+        "[Morrow] Loading mod: {} v{}",
         manifest.package.name, manifest.package.version
     );
 
@@ -164,50 +164,50 @@ pub fn load_package(
 
     // 9. Discover optional exports
     let tick_callback: Option<unsafe extern "C" fn(u64)> = unsafe {
-        library.get::<unsafe extern "C" fn(u64)>(b"ferrum_mod_tick")
+        library.get::<unsafe extern "C" fn(u64)>(b"morrow_mod_tick")
             .ok().map(|sym| *sym.into_raw())
     };
     let server_start_callback: Option<unsafe extern "C" fn()> = unsafe {
-        library.get::<unsafe extern "C" fn()>(b"ferrum_mod_server_start")
+        library.get::<unsafe extern "C" fn()>(b"morrow_mod_server_start")
             .ok().map(|sym| *sym.into_raw())
     };
     let server_stop_callback: Option<unsafe extern "C" fn()> = unsafe {
-        library.get::<unsafe extern "C" fn()>(b"ferrum_mod_server_stop")
+        library.get::<unsafe extern "C" fn()>(b"morrow_mod_server_stop")
             .ok().map(|sym| *sym.into_raw())
     };
     let player_join_callback = unsafe {
-        library.get::<unsafe extern "C" fn(*const u8, u32)>(b"ferrum_mod_player_join")
+        library.get::<unsafe extern "C" fn(*const u8, u32)>(b"morrow_mod_player_join")
             .ok().map(|sym| *sym.into_raw())
     };
     let player_leave_callback = unsafe {
-        library.get::<unsafe extern "C" fn(*const u8, u32)>(b"ferrum_mod_player_leave")
+        library.get::<unsafe extern "C" fn(*const u8, u32)>(b"morrow_mod_player_leave")
             .ok().map(|sym| *sym.into_raw())
     };
     let chat_message_callback = unsafe {
-        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"ferrum_mod_chat_message")
+        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"morrow_mod_chat_message")
             .ok().map(|sym| *sym.into_raw())
     };
     let block_break_callback = unsafe {
-        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"ferrum_mod_block_break")
+        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"morrow_mod_block_break")
             .ok().map(|sym| *sym.into_raw())
     };
     let block_place_callback = unsafe {
-        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"ferrum_mod_block_place")
+        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"morrow_mod_block_place")
             .ok().map(|sym| *sym.into_raw())
     };
     let player_death_callback = unsafe {
-        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"ferrum_mod_player_death")
+        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"morrow_mod_player_death")
             .ok().map(|sym| *sym.into_raw())
     };
 
     if tick_callback.is_some() {
-        eprintln!("[Ferrum]   Optional: ferrum_mod_tick");
+        eprintln!("[Morrow]   Optional: morrow_mod_tick");
     }
     if server_start_callback.is_some() {
-        eprintln!("[Ferrum]   Optional: ferrum_mod_server_start");
+        eprintln!("[Morrow]   Optional: morrow_mod_server_start");
     }
     if server_stop_callback.is_some() {
-        eprintln!("[Ferrum]   Optional: ferrum_mod_server_stop");
+        eprintln!("[Morrow]   Optional: morrow_mod_server_stop");
     }
 
     // 10. Track
@@ -235,7 +235,7 @@ pub fn load_package(
         },
     );
 
-    eprintln!("[Ferrum] Loaded mod: {name}");
+    eprintln!("[Morrow] Loaded mod: {name}");
     Ok((name, exports))
 }
 
@@ -313,7 +313,7 @@ fn extract_artifact(
     std::fs::write(&dest, &buf).map_err(|e| format!("write artifact: {e}"))?;
 
     eprintln!(
-        "[Ferrum]   Extracted {} ({:.1} KB)",
+        "[Morrow]   Extracted {} ({:.1} KB)",
         lib_filename,
         buf.len() as f64 / 1024.0
     );

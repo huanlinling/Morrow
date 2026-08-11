@@ -20,7 +20,7 @@
 | 0.3 | 创建 monorepo 目录结构 | ⬜ |
 | 0.4 | 创建 `runtime-rs/` cdylib crate | ⬜ |
 | 0.5 | 实现 `add(a: i32, b: i32) -> i32` | ⬜ |
-| 0.6 | 构建 `libferrum_runtime.so` | ⬜ |
+| 0.6 | 构建 `libmorrow_runtime.so` | ⬜ |
 | 0.7 | 创建 `bridge-java/` Gradle project | ⬜ |
 | 0.8 | 实现 Panama `Linker.downcallHandle` 调用 `add` | ⬜ |
 | 0.9 | 运行并验证输出 `5` | ⬜ |
@@ -28,7 +28,7 @@
 ### 验收标准
 
 ```
-$ java -cp ... com.ferrum.HelloPanama
+$ java -cp ... com.morrow.HelloPanama
 5
 ```
 
@@ -45,10 +45,10 @@ $ java -cp ... com.ferrum.HelloPanama
 | # | 任务 | 状态 |
 |---|------|------|
 | 1.1 | 定义 ABI 数据结构（Handle, error codes） | ⬜ |
-| 1.2 | 实现 `ferrum_init()` → runtime_handle | ⬜ |
-| 1.3 | 实现 `ferrum_shutdown(runtime_handle)` | ⬜ |
+| 1.2 | 实现 `morrow_init()` → runtime_handle | ⬜ |
+| 1.3 | 实现 `morrow_shutdown(runtime_handle)` | ⬜ |
 | 1.4 | 实现 Handle 分配/释放系统 | ⬜ |
-| 1.5 | 实现 Error Channel（`ferrum_last_error` 等） | ⬜ |
+| 1.5 | 实现 Error Channel（`morrow_last_error` 等） | ⬜ |
 | 1.6 | 实现 Runtime state machine | ⬜ |
 | 1.7 | Java 侧：加载 .so + 调用 init/shutdown | ⬜ |
 | 1.8 | 泄漏测试：init → shutdown 循环 10 次 | ⬜ |
@@ -78,7 +78,7 @@ Test: init → shutdown 10 iterations
 | # | 任务 | 状态 |
 |---|------|------|
 | 2.1 | 创建 Fabric mod 骨架（`build.gradle` + Loom） | ⬜ |
-| 2.2 | 实现 `FerrumMod.onInitialize()` | ⬜ |
+| 2.2 | 实现 `MorrowMod.onInitialize()` | ⬜ |
 | 2.3 | 实现 `NativeLibraryLoader`（平台感知） | ⬜ |
 | 2.4 | 实现 `PanamaBridge`（Linker + MethodHandle 管理） | ⬜ |
 | 2.5 | 实现 `LifecycleCoordinator`（Fabric → Rust 生命周期同步） | ⬜ |
@@ -88,10 +88,10 @@ Test: init → shutdown 10 iterations
 ### 验收标准
 
 ```
-[main/INFO] [Ferrum]: Native library loaded: libferrum_runtime.so
-[main/INFO] [Ferrum]: Panama bridge initialized
-[main/INFO] [Ferrum]: Runtime initialized (ABI v1, handle=0x1)
-[main/INFO] [Ferrum]: Ready. Waiting for mods.
+[main/INFO] [Morrow]: Native library loaded: libmorrow_runtime.so
+[main/INFO] [Morrow]: Panama bridge initialized
+[main/INFO] [Morrow]: Runtime initialized (ABI v1, handle=0x1)
+[main/INFO] [Morrow]: Ready. Waiting for mods.
 ```
 
 ---
@@ -106,25 +106,25 @@ Test: init → shutdown 10 iterations
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 3.1 | 实现 `.ferrum` 包读取（ZIP + manifest 解析） | ⬜ |
+| 3.1 | 实现 `.morrow` 包读取（ZIP + manifest 解析） | ⬜ |
 | 3.2 | 实现平台 artifact 选择 | ⬜ |
-| 3.3 | 实现 `ferrum_load_mod(path)` 完整流程 | ⬜ |
+| 3.3 | 实现 `morrow_load_mod(path)` 完整流程 | ⬜ |
 | 3.4 | 实现 Mod Registry（注册/查找/卸载） | ⬜ |
-| 3.5 | 实现 Mod entry point 调用（`ferrum_mod_init`） | ⬜ |
-| 3.6 | 编写示例 mod（`hello-ferrum`） | ⬜ |
+| 3.5 | 实现 Mod entry point 调用（`morrow_mod_init`） | ⬜ |
+| 3.6 | 编写示例 mod（`hello-morrow`） | ⬜ |
 | 3.7 | Mod 加载错误处理与日志 | ⬜ |
 | 3.8 | 集成测试：真实 Minecraft + loaded Rust mod | ⬜ |
 
 ### 验收标准
 
 ```
-[main/INFO] [Ferrum]: Scanning mods/...
-[main/INFO] [Ferrum]: Found: mods/hello-ferrum.ferrum
-[main/INFO] [Ferrum]: Loading hello-ferrum v0.1.0...
-[main/INFO] [Ferrum]:   Platform: linux-x86_64
-[main/INFO] [Ferrum]:   Entry: ferrum_mod_init
-[main/INFO] [Ferrum]:   Status: loaded (handle=0x2)
-[main/INFO] [hello-ferrum]: Hello from Rust!
+[main/INFO] [Morrow]: Scanning mods/...
+[main/INFO] [Morrow]: Found: mods/hello-morrow.morrow
+[main/INFO] [Morrow]: Loading hello-morrow v0.1.0...
+[main/INFO] [Morrow]:   Platform: linux-x86_64
+[main/INFO] [Morrow]:   Entry: morrow_mod_init
+[main/INFO] [Morrow]:   Status: loaded (handle=0x2)
+[main/INFO] [hello-morrow]: Hello from Rust!
 ```
 
 ---
@@ -143,18 +143,18 @@ Test: init → shutdown 10 iterations
 | 4.2 | 定义标准事件类型（ServerTick, PlayerJoin, etc.） | ⬜ |
 | 4.3 | 实现 Fabric event → Rust dispatch | ⬜ |
 | 4.4 | 实现 Panama upcall stub（Rust → Java 回调） | ⬜ |
-| 4.5 | 实现 `ferrum_tick()` 每 tick 驱动 | ⬜ |
+| 4.5 | 实现 `morrow_tick()` 每 tick 驱动 | ⬜ |
 | 4.6 | 示例 mod 响应游戏事件 | ⬜ |
 | 4.7 | 性能测试：tick dispatch 延迟 | ⬜ |
 
 ### 验收标准
 
 ```
-[Tick 0] [Ferrum]: Dispatching to 1 mod(s)
-[Tick 20] [hello-ferrum]: Second passed! Players: 0
-[Tick 40] [hello-ferrum]: Second passed! Players: 0
+[Tick 0] [Morrow]: Dispatching to 1 mod(s)
+[Tick 20] [hello-morrow]: Second passed! Players: 0
+[Tick 40] [hello-morrow]: Second passed! Players: 0
 ...
-[Tick 200] [hello-ferrum]: 10 seconds uptime
+[Tick 200] [hello-morrow]: 10 seconds uptime
 
 Benchmark:
   Empty mod tick overhead: <100μs
@@ -174,9 +174,9 @@ Benchmark:
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 5.1 | 实现 `#[ferrum::mod_main]` proc macro | ⬜ |
+| 5.1 | 实现 `#[morrow::mod_main]` proc macro | ⬜ |
 | 5.2 | 实现 Context API（event_bus, commands, config） | ⬜ |
-| 5.3 | 实现日志宏（ferrum::info!/warn!/error!） | ⬜ |
+| 5.3 | 实现日志宏（morrow::info!/warn!/error!） | ⬜ |
 | 5.4 | 实现事件监听注册糖 | ⬜ |
 | 5.5 | 编写 SDK 文档 | ⬜ |
 | 5.6 | 编写快速入门指南 | ⬜ |
@@ -185,11 +185,11 @@ Benchmark:
 
 ```rust
 // 5 行代码的 mod
-use ferrum::prelude::*;
+use morrow::prelude::*;
 
-#[ferrum::mod_main]
-fn init(ctx: &mut Context) -> Result<(), FerrumError> {
-    ferrum::info!("Hello Ferrum!");
+#[morrow::mod_main]
+fn init(ctx: &mut Context) -> Result<(), MorrowError> {
+    morrow::info!("Hello Morrow!");
     Ok(())
 }
 ```
@@ -279,12 +279,12 @@ Scalability:
 ### 验收标准
 
 ```
-ferrum = "1.0.0"  # crates.io 可下载
-cargo install ferrum-cli
-ferrum new my-first-mod
-ferrum build
-ferrum package
-# → my-first-mod.ferrum 可被 FerrumHost 加载
+morrow = "1.0.0"  # crates.io 可下载
+cargo install morrow-cli
+morrow new my-first-mod
+morrow build
+morrow package
+# → my-first-mod.morrow 可被 MorrowHost 加载
 ```
 
 ---

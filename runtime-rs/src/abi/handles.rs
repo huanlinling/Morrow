@@ -1,4 +1,4 @@
-//! Opaque handle system for the Ferrum FFI boundary.
+//! Opaque handle system for the Morrow FFI boundary.
 //!
 //! All Rust objects exposed to Java are referenced through opaque
 //! `u64` handles. This module provides the handle-to-object mapping

@@ -1,11 +1,11 @@
-package com.ferrum.host;
+package com.morrow.host;
 
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
 /**
- * Performance benchmarks for the Ferrum Panama FFI bridge.
+ * Performance benchmarks for the Morrow Panama FFI bridge.
  *
  * <p>Measures:
  * <ol>
@@ -16,7 +16,7 @@ import java.lang.invoke.MethodHandle;
  * <p>Run with: {@code make test-bridge} then manually:
  * <pre>{@code
  *   java --enable-preview --enable-native-access=ALL-UNNAMED \
- *        -cp bridge-java/out com.ferrum.host.Benchmark
+ *        -cp bridge-java/out com.morrow.host.Benchmark
  * }</pre>
  */
 public class Benchmark {
@@ -28,7 +28,7 @@ public class Benchmark {
         PanamaBridge bridge = PanamaBridge.create(
                 PanamaBridge.findNativeLibrary());
 
-        System.out.println("=== Ferrum Performance Benchmarks ===\n");
+        System.out.println("=== Morrow Performance Benchmarks ===\n");
 
         benchDowncallLatency(bridge);
         benchTickDispatch(bridge);
@@ -77,21 +77,21 @@ public class Benchmark {
     private static void benchTickDispatch(PanamaBridge bridge) throws Throwable {
         System.out.println("--- Tick Dispatch ---");
 
-        MethodHandle init = bridge.downcall("ferrum_init",
+        MethodHandle init = bridge.downcall("morrow_init",
                 FunctionDescriptor.of(ValueLayout.JAVA_LONG,
                         ValueLayout.JAVA_INT));
-        MethodHandle tick = bridge.downcall("ferrum_tick",
+        MethodHandle tick = bridge.downcall("morrow_tick",
                 FunctionDescriptor.ofVoid(
                         ValueLayout.JAVA_LONG,
                         ValueLayout.JAVA_LONG));
-        MethodHandle shutdown = bridge.downcall("ferrum_shutdown",
+        MethodHandle shutdown = bridge.downcall("morrow_shutdown",
                 FunctionDescriptor.of(ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_LONG));
 
         // Init runtime
         long handle = (long) init.invokeExact(PanamaBridge.ABI_VERSION);
         if (handle == 0) {
-            System.err.println("  ERROR: ferrum_init failed");
+            System.err.println("  ERROR: morrow_init failed");
             return;
         }
 

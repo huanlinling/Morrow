@@ -23,7 +23,7 @@ where
                 .copied()
                 .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                 .unwrap_or("<non-string panic payload>");
-            eprintln!("[Ferrum] panic caught at FFI boundary: {msg}");
+            eprintln!("[Morrow] panic caught at FFI boundary: {msg}");
             default
         }
     }

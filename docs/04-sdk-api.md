@@ -14,7 +14,7 @@ SDK 是对 Runtime Core ABI 的高层封装，目标：
 ### 最小 Mod
 
 ```rust
-use ferrum::prelude::*;
+use morrow::prelude::*;
 
 // 定义 mod 结构体
 struct MyMod {
@@ -22,46 +22,46 @@ struct MyMod {
 }
 
 // 实现 Mod 接口
-impl FerrumMod for MyMod {
+impl MorrowMod for MyMod {
     fn metadata(&self) -> ModMetadata {
         ModMetadata::new("my-mod", "0.1.0")
-            .description("My first Ferrum mod")
+            .description("My first Morrow mod")
             .author("dev")
     }
 
-    fn on_init(&mut self, ctx: &mut Context) -> Result<(), FerrumError> {
-        ferrum::info!("MyMod initialized!");
+    fn on_init(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
+        morrow::info!("MyMod initialized!");
         Ok(())
     }
 
-    fn on_tick(&mut self, ctx: &mut Context, tick: u64) -> Result<(), FerrumError> {
+    fn on_tick(&mut self, ctx: &mut Context, tick: u64) -> Result<(), MorrowError> {
         self.tick_count += 1;
         if tick % 20 == 0 {
-            ferrum::info!("Second passed! Tick: {}", tick);
+            morrow::info!("Second passed! Tick: {}", tick);
         }
         Ok(())
     }
 }
 
 // 导出为动态库入口
-ferrum::export_mod!(MyMod);
+morrow::export_mod!(MyMod);
 ```
 
 ### Proc Macro 版本（Milestone 5）
 
 ```rust
-use ferrum::prelude::*;
+use morrow::prelude::*;
 
-#[ferrum::mod_main]
-fn init(ctx: &mut Context) -> Result<(), FerrumError> {
+#[morrow::mod_main]
+fn init(ctx: &mut Context) -> Result<(), MorrowError> {
     ctx.on_tick(|tick| {
         if tick % 20 == 0 {
-            ferrum::info!("Tick: {}", tick);
+            morrow::info!("Tick: {}", tick);
         }
     });
 
     ctx.on_server_start(|_| {
-        ferrum::info!("Server started!");
+        morrow::info!("Server started!");
     });
 
     Ok(())
@@ -207,11 +207,11 @@ pub struct CommandContext {
 
 ```rust
 // 宏形式
-ferrum::info!("Player {} joined", name);
-ferrum::warn!("Low memory: {}MB remaining", mb);
-ferrum::error!("Failed to save: {}", err);
-ferrum::debug!("Position: {:?}", pos);
-ferrum::trace!("Event dispatch took {}ns", ns);
+morrow::info!("Player {} joined", name);
+morrow::warn!("Low memory: {}MB remaining", mb);
+morrow::error!("Failed to save: {}", err);
+morrow::debug!("Position: {:?}", pos);
+morrow::trace!("Event dispatch took {}ns", ns);
 
 // 会路由到 Java 侧的 log4j，与 Minecraft 日志统一
 ```
@@ -228,9 +228,9 @@ struct MyConfig {
     max_entities: u32,
 }
 
-fn on_init(&mut self, ctx: &mut Context) -> Result<(), FerrumError> {
+fn on_init(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
     let config: MyConfig = ctx.config_for("my-mod")?;
-    ferrum::info!("{}", config.greeting);
+    morrow::info!("{}", config.greeting);
     Ok(())
 }
 ```
@@ -241,7 +241,7 @@ fn on_init(&mut self, ctx: &mut Context) -> Result<(), FerrumError> {
 sdk-rs/
 ├── Cargo.toml
 │   [dependencies]
-│   ferrum-macros = { path = "../ferrum-macros" }
+│   morrow-macros = { path = "../morrow-macros" }
 │   serde = { version = "1", features = ["derive"] }
 │   serde_json = "1"
 │   log = "0.4"
@@ -249,15 +249,15 @@ sdk-rs/
 ├── src/
 │   ├── lib.rs            # pub mod prelude; re-exports
 │   ├── prelude.rs        # 常用类型集中导入
-│   ├── mod_trait.rs      # FerrumMod trait + derive
+│   ├── mod_trait.rs      # MorrowMod trait + derive
 │   ├── context.rs        # Context 实现
 │   ├── event.rs          # Event, EventBus, EventPriority
 │   ├── command.rs        # CommandRegistry, CommandContext
 │   ├── log.rs            # 日志宏
 │   ├── config.rs         # 配置读取
-│   └── error.rs          # FerrumError 类型
+│   └── error.rs          # MorrowError 类型
 │
-├── ferrum-macros/
+├── morrow-macros/
 │   ├── Cargo.toml
 │   │   [lib]
 │   │   proc-macro = true
@@ -268,7 +268,7 @@ sdk-rs/
 │   │
 │   └── src/
 │       ├── lib.rs         # proc macro 入口
-│       └── mod_main.rs    # #[ferrum::mod_main] 实现
+│       └── mod_main.rs    # #[morrow::mod_main] 实现
 ```
 
 ## SDK 设计原则

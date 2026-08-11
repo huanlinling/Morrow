@@ -1,6 +1,6 @@
 # 00 — 概述：哲学、目标与非目标
 
-## 为什么存在 Ferrum
+## 为什么存在 Morrow
 
 Minecraft 模组生态已经发展了十多年，几乎所有模组都是用 Java 写的。这没问题——Java 是 Minecraft 的原生语言，Forge/Fabric 生态极其成熟。
 
@@ -15,7 +15,7 @@ Minecraft 模组生态已经发展了十多年，几乎所有模组都是用 Jav
 | 独立 native mod | 无法与 Java mod 通信、需要自研 loader |
 | 纯 Rust 重写 Minecraft | 不现实、生态为零 |
 
-Ferrum 走一条中间路线：**Rust 写 Mod，Panama 做桥，Fabric 做宿主。**
+Morrow 走一条中间路线：**Rust 写 Mod，Panama 做桥，Fabric 做宿主。**
 
 ## 核心设计原则
 
@@ -36,7 +36,7 @@ Ferrum 走一条中间路线：**Rust 写 Mod，Panama 做桥，Fabric 做宿主
 
 ## 非目标（明确说不做）
 
-- **替代 Fabric/Forge** — Ferrum 是 Platform，不是 Loader
+- **替代 Fabric/Forge** — Morrow 是 Platform，不是 Loader
 - **100% Rust 重写 MC** — 不现实也不需要
 - **自动 Java → Rust 翻译** — 不做，也不推荐
 - **Web UI / 管理面板** — 不属于 Runtime 范畴
@@ -44,8 +44,8 @@ Ferrum 走一条中间路线：**Rust 写 Mod，Panama 做桥，Fabric 做宿主
 
 ## 项目命名
 
-"Ferrum" = 拉丁语 "铁"
+"Morrow" = 拉丁语 "铁"
 
-- Iron → Ferrum → Rust（双关：铁锈 = Rust）
+- Iron → Morrow → Rust（双关：铁锈 = Rust）
 - 暗示坚固、稳定、基础设施级别的可靠性
 - 与 Minecraft 的 "铁锭" 有文化关联

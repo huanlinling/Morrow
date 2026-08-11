@@ -1,15 +1,15 @@
-//! Manifest parsing for `.ferrum` packages.
+//! Manifest parsing for `.morrow` packages.
 //!
 //! See docs/05-package-format.md for the specification.
 
 use serde::Deserialize;
 
-/// Parsed manifest.toml from a .ferrum package.
+/// Parsed manifest.toml from a .morrow package.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     pub package: PackageMeta,
     #[allow(dead_code)]
-    pub ferrum: FerrumMeta,
+    pub morrow: MorrowMeta,
     pub entry: EntryMeta,
 }
 
@@ -20,14 +20,14 @@ pub struct PackageMeta {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct FerrumMeta {
+pub struct MorrowMeta {
     #[allow(dead_code)]
     pub api_version: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EntryMeta {
-    /// Name of the exported entry symbol (e.g. "ferrum_mod_init").
+    /// Name of the exported entry symbol (e.g. "morrow_mod_init").
     pub symbol: String,
 }
 
@@ -44,19 +44,19 @@ mod tests {
     fn test_parse_valid_manifest() {
         let toml = r#"
 [package]
-name = "hello-ferrum"
+name = "hello-morrow"
 version = "0.1.0"
 
-[ferrum]
+[morrow]
 api_version = 1
 
 [entry]
-symbol = "ferrum_mod_init"
+symbol = "morrow_mod_init"
 "#;
         let m = parse(toml).unwrap();
-        assert_eq!(m.package.name, "hello-ferrum");
+        assert_eq!(m.package.name, "hello-morrow");
         assert_eq!(m.package.version, "0.1.0");
-        assert_eq!(m.ferrum.api_version, 1);
-        assert_eq!(m.entry.symbol, "ferrum_mod_init");
+        assert_eq!(m.morrow.api_version, 1);
+        assert_eq!(m.entry.symbol, "morrow_mod_init");
     }
 }

@@ -1,19 +1,19 @@
 //! Runtime state machine.
 //!
-//! Tracks the lifecycle of a Ferrum Runtime kernel. The "does not exist"
+//! Tracks the lifecycle of a Morrow Runtime kernel. The "does not exist"
 //! state is represented by absence from the global registry — see
 //! [`super::RUNTIMES`]. Once created, a kernel proceeds linearly through
 //! its three states.
 
-/// A stage in the Ferrum Runtime lifecycle.
+/// A stage in the Morrow Runtime lifecycle.
 ///
 /// A kernel is created in the [`Ready`](RuntimeState::Ready) state
 /// and destroyed after reaching [`Dead`](RuntimeState::Dead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeState {
-    /// `ferrum_init` succeeded. Ready for mod loading.
+    /// `morrow_init` succeeded. Ready for mod loading.
     Ready,
-    /// `ferrum_shutdown` called. Cleaning up resources.
+    /// `morrow_shutdown` called. Cleaning up resources.
     ShuttingDown,
     /// Shutdown complete. The kernel will be removed from the registry.
     Dead,

@@ -1,8 +1,8 @@
 [package]
-name = "ferrum"
+name = "morrow"
 version = "0.1.0"
 edition = "2021"
-description = "Ferrum SDK — Rust crate for building Minecraft mods"
+description = "Morrow SDK — Rust crate for building Minecraft mods"
 
 [dependencies]
-ferrum-macros = { path = "ferrum-macros" }
+morrow-macros = { path = "morrow-macros" }

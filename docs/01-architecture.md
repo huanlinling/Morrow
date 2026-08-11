@@ -9,7 +9,7 @@
           │               │               │
      Fabric API      Java Mod A      Java Mod B
           │
-     FerrumHostMod (Fabric ModInitializer)
+     MorrowHostMod (Fabric ModInitializer)
           │
 ┌─────────┼─────────┐
 │   Panama FFM API   │  ← JDK 21 java.lang.foreign
@@ -36,7 +36,7 @@
 │   │ │ └───────┘ │ │  │
 │   │ └───────────┘ │  │
 │   └───────────────┘  │
-│  Ferrum Runtime Core │  Rust cdylib
+│  Morrow Runtime Core │  Rust cdylib
 └──────────────────────┘
 ```
 
@@ -49,19 +49,19 @@ Fabric Loader 负责：
 - 生命周期调度
 - Mixin 注入
 
-Ferrum 不修改 Fabric Loader，只作为一个普通的 Fabric Mod 存在。
+Morrow 不修改 Fabric Loader，只作为一个普通的 Fabric Mod 存在。
 
 **关键依赖：**
-- `fabric-loader`: 加载 FerrumHostMod
+- `fabric-loader`: 加载 MorrowHostMod
 - `fabric-api`: 事件系统、注册表等
 
-### Layer 1: Ferrum Host Adapter (Java, runs inside JVM)
+### Layer 1: Morrow Host Adapter (Java, runs inside JVM)
 
 **模块分解：**
 
 ```
-com.ferrum.host
-├── FerrumMod.java          # implements ModInitializer
+com.morrow.host
+├── MorrowMod.java          # implements ModInitializer
 ├── NativeLibraryLoader.java # 平台感知的 .so/.dll 加载
 ├── PanamaBridge.java        # 一次性初始化 Panama 链接
 ├── LifecycleCoordinator.java # 管理 JVM ↔ Rust 生命周期同步
@@ -71,10 +71,10 @@ com.ferrum.host
 └── NativeCrashDetector.java  # 检测 native 崩溃并尝试恢复
 ```
 
-**FerrumMod.java 启动序列：**
+**MorrowMod.java 启动序列：**
 
 ```java
-public class FerrumMod implements ModInitializer {
+public class MorrowMod implements ModInitializer {
     @Override
     public void onInitialize() {
         // 1. Platform detection
@@ -82,18 +82,18 @@ public class FerrumMod implements ModInitializer {
 
         // 2. Load native runtime
         Path runtimeLib = NativeLibraryLoader.load(
-            platform, "ferrum_runtime");
+            platform, "morrow_runtime");
 
         // 3. Setup Panama bridge
         PanamaBridge bridge = PanamaBridge.create(runtimeLib);
 
         // 4. Initialize runtime
-        long runtimeHandle = bridge.ferrumInit(ABI_VERSION);
+        long runtimeHandle = bridge.morrowInit(ABI_VERSION);
 
         // 5. Discover and load mods
         List<Path> modPackages = ModDiscovery.scan("mods/");
         for (Path pkg : modPackages) {
-            bridge.ferrumLoadMod(runtimeHandle, pkg);
+            bridge.morrowLoadMod(runtimeHandle, pkg);
         }
 
         // 6. Attach lifecycle hooks
@@ -127,17 +127,17 @@ Panama FFM 直接解决了这三个问题：
 // 一次性初始化（启动时）
 Linker linker = Linker.nativeLinker();
 SymbolLookup runtime = SymbolLookup.libraryLookup(
-    Path.of("libferrum_runtime.so"), Arena.global());
+    Path.of("libmorrow_runtime.so"), Arena.global());
 
-MethodHandle ferrum_init = linker.downcallHandle(
-    runtime.find("ferrum_init").orElseThrow(),
+MethodHandle morrow_init = linker.downcallHandle(
+    runtime.find("morrow_init").orElseThrow(),
     FunctionDescriptor.of(
         ValueLayout.JAVA_LONG,  // return: Handle
         ValueLayout.JAVA_INT    // param: abi_version
     ));
 
 // 调用（每次）
-long handle = (long) ferrum_init.invokeExact(1);
+long handle = (long) morrow_init.invokeExact(1);
 ```
 
 **Upcall 示例（Rust → Java 回调）：**
@@ -157,13 +157,13 @@ MethodHandle onEvent = linker.upcallStub(
 );
 
 // 把 upcall stub 的内存地址传给 Rust
-ferrum_register_callback(runtimeHandle,
+morrow_register_callback(runtimeHandle,
     /* event_type */ "server.tick",
     /* callback */ onEventStub.address()
 );
 ```
 
-### Layer 3: Ferrum Runtime Core (Rust)
+### Layer 3: Morrow Runtime Core (Rust)
 
 **内部架构：**
 
@@ -185,7 +185,7 @@ runtime-rs/
 │   │   └── dispatch.rs  # dispatch_event implementation
 │   ├── mod_loader/
 │   │   ├── mod.rs       # Mod loading orchestration
-│   │   ├── manifest.rs  # .ferrum manifest parsing
+│   │   ├── manifest.rs  # .morrow manifest parsing
 │   │   └── artifact.rs  # Platform artifact selection
 │   ├── cap/
 │   │   ├── mod.rs       # CapabilityRegistry
@@ -238,22 +238,22 @@ SDK 是对 Runtime Core ABI 的 ergonomic 封装。
 **开发者视角：**
 
 ```rust
-use ferrum::prelude::*;
+use morrow::prelude::*;
 
-#[ferrum::mod_main]
-fn init(ctx: &mut Context) -> Result<(), FerrumError> {
+#[morrow::mod_main]
+fn init(ctx: &mut Context) -> Result<(), MorrowError> {
     // 注册事件监听
     ctx.event_bus()?.on::<ServerTick>(|event| {
         if event.tick_number % 20 == 0 {
             // 获取在线玩家
             let players = event.server().online_players();
-            ferrum::info!("Online players: {}", players.len());
+            morrow::info!("Online players: {}", players.len());
         }
     });
 
     // 注册命令
     ctx.commands()?.register("hello", |args| {
-        ferrum::info!("Hello, {}!", args.get(0).unwrap_or(&"world".into()));
+        morrow::info!("Hello, {}!", args.get(0).unwrap_or(&"world".into()));
     });
 
     Ok(())
@@ -277,7 +277,7 @@ Minecraft Server Thread
   │             tickData.set(JAVA_LONG, 0, tickNumber);
   │
   │             // 2. 调用 Rust (单次 downcall)
-  │             ferrum_tick.invokeExact(runtimeHandle);
+  │             morrow_tick.invokeExact(runtimeHandle);
   │
   │             // 3. Rust 内部通过 upcall 获取 tick data
   │             //    或直接读 MemorySegment

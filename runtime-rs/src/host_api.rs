@@ -28,14 +28,14 @@ pub struct RuntimeApi {
 impl RuntimeApi {
     pub fn new() -> Self {
         RuntimeApi {
-            get_player_count: crate::ferrum_get_player_count,
-            send_message: crate::ferrum_send_message,
-            register_command: crate::ferrum_register_command,
-            get_player_list: crate::ferrum_get_player_list,
-            execute_command: crate::ferrum_execute_command,
-            get_world_time: crate::ferrum_get_world_time,
-            get_config: crate::ferrum_get_mod_config,
-            request_capability: crate::ferrum_request_capability,
+            get_player_count: crate::morrow_get_player_count,
+            send_message: crate::morrow_send_message,
+            register_command: crate::morrow_register_command,
+            get_player_list: crate::morrow_get_player_list,
+            execute_command: crate::morrow_execute_command,
+            get_world_time: crate::morrow_get_world_time,
+            get_config: crate::morrow_get_mod_config,
+            request_capability: crate::morrow_request_capability,
         }
     }
 }

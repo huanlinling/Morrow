@@ -1,6 +1,6 @@
 //! Per-tick callback registry.
 //!
-//! Mods can optionally export `ferrum_mod_tick(tick: u64)` to receive
+//! Mods can optionally export `morrow_mod_tick(tick: u64)` to receive
 //! tick events. The runtime discovers this symbol during mod loading
 //! and registers it here.
 
@@ -51,7 +51,7 @@ impl TickRegistry {
                     .copied()
                     .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                     .unwrap_or("<non-string panic>");
-                eprintln!("[Ferrum] Mod '{name}' panicked during tick {tick}: {msg}");
+                eprintln!("[Morrow] Mod '{name}' panicked during tick {tick}: {msg}");
                 panicked.push(name.clone());
             }
         }

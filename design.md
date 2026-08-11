@@ -1,4 +1,4 @@
-# Ferrum Design Plan
+# Morrow Design Plan
 
 > 构建基于 **Rust + Project Panama** 的现代 Minecraft Native Runtime Platform
 >
@@ -8,7 +8,7 @@
 
 ## 零、定位声明
 
-**Ferrum 是什么：**
+**Morrow 是什么：**
 
 | ✅ 是 | ❌ 不是 |
 |-------|--------|
@@ -17,10 +17,10 @@
 | 与 Java Mod 共存的桥梁 | 仅调用 native 的实验品 |
 | 面向性能的严肃基础设施 | 玩具项目 |
 
-**Ferrum 提供：**
+**Morrow 提供：**
 - Rust 编写 Mod（proc macro SDK）
 - Java Host 桥接（Fabric Mod → Panama FFI）
-- 跨平台 Native Artifact 加载（`.ferrum` 包格式）
+- 跨平台 Native Artifact 加载（`.morrow` 包格式）
 - 稳定 ABI（opaque handles, no struct exposure）
 - Runtime 生命周期管理
 - Host Capability 抽象（registry, events, 未来扩展）
@@ -64,7 +64,7 @@
 | 运行时 | 需要加载 JNI 库 | JDK 内置，无需额外 Runtime |
 | 未来 | 遗留 API | JDK 官方主推方向 |
 
-**结论：Panama 是现代 JDK 的 native 互操作标准答案。Ferrum 全栈使用 Panama FFM API。**
+**结论：Panama 是现代 JDK 的 native 互操作标准答案。Morrow 全栈使用 Panama FFM API。**
 
 ---
 
@@ -92,7 +92,7 @@
 │                 │  FFI Boundary             │
 ├─────────────────┼───────────────────────────┤
 │  ┌──────────────▼───────────────────────┐  │
-│  │  Ferrum Runtime Core (Rust cdylib)   │  │
+│  │  Morrow Runtime Core (Rust cdylib)   │  │
 │  │                                      │  │
 │  │  ┌────────────────────────────────┐  │  │
 │  │  │ ABI Layer (extern "C" fns)     │  │  │
@@ -113,7 +113,7 @@
 │  │ Mod A    Mod B    Mod C              │  │
 │  └──────────────────────────────────────┘  │
 │                                            │
-│  Ferrum Runtime (.so / .dll)               │
+│  Morrow Runtime (.so / .dll)               │
 └────────────────────────────────────────────┘
 ```
 
@@ -124,8 +124,8 @@
 ```
 bridge-java/
 ├── fabric-host/
-│   ├── src/main/java/com/ferrum/host/
-│   │   ├── FerrumMod.java          # Fabric ModInitializer entry
+│   ├── src/main/java/com/morrow/host/
+│   │   ├── MorrowMod.java          # Fabric ModInitializer entry
 │   │   ├── NativeLibraryLoader.java # Platform-aware .so/.dll loading
 │   │   ├── PanamaBridge.java        # Linker setup, downcall/upcall
 │   │   ├── LifecycleCoordinator.java # JVM lifecycle → Rust lifecycle
@@ -137,7 +137,7 @@ bridge-java/
 职责：
 - Fabric `ModInitializer` 入口
 - 识别平台（os.name, os.arch）→ 选择正确的 native artifact
-- 通过 Panama `SymbolLookup` 加载 `libferrum_runtime.so`
+- 通过 Panama `SymbolLookup` 加载 `libmorrow_runtime.so`
 - 绑定 Rust 导出的 extern "C" 函数为 MethodHandle
 - 将 Fabric 生命周期事件翻译为 Rust dispatch 调用
 - 提供 Arena 管理（每个 tick 一个 Arena scope）
@@ -152,19 +152,19 @@ Linker linker = Linker.nativeLinker();
 
 // 2. 加载 native library
 SymbolLookup lookup = SymbolLookup.libraryLookup(
-    Path.of("libferrum_runtime.so"), Arena.global());
+    Path.of("libmorrow_runtime.so"), Arena.global());
 
 // 3. 查找函数符号
-MemorySegment addr = lookup.find("ferrum_init")
-    .orElseThrow(() -> new UnsatisfiedLinkError("ferrum_init not found"));
+MemorySegment addr = lookup.find("morrow_init")
+    .orElseThrow(() -> new UnsatisfiedLinkError("morrow_init not found"));
 
 // 4. 创建 downcall handle
-MethodHandle ferrum_init = linker.downcallHandle(addr,
+MethodHandle morrow_init = linker.downcallHandle(addr,
     FunctionDescriptor.of(ValueLayout.JAVA_INT)); // () -> int32
 
 // 5. 调用（每个 tick 在 arena scope 内）
 try (Arena arena = Arena.ofConfined()) {
-    int result = (int) ferrum_init.invokeExact();
+    int result = (int) morrow_init.invokeExact();
 }
 ```
 
@@ -174,7 +174,7 @@ try (Arena arena = Arena.ofConfined()) {
 - 所有跨 FFI 的字符串通过 `MemorySegment` + UTF-8 传递，不在 native 侧分配 Java String
 - Upcall stub 用于 Rust → Java 回调（事件通知）
 
-#### Layer 3: Ferrum Runtime Core（Rust cdylib）
+#### Layer 3: Morrow Runtime Core（Rust cdylib）
 
 ```
 runtime-rs/
@@ -211,8 +211,8 @@ sdk-rs/
 │   ├── lib.rs
 │   ├── context.rs   # Context: capability accessor
 │   ├── event.rs     # Event listener trait
-│   └── mod_main.rs  # #[ferrum::mod_main] proc macro re-export
-├── ferrum-macros/
+│   └── mod_main.rs  # #[morrow::mod_main] proc macro re-export
+├── morrow-macros/
 │   ├── Cargo.toml
 │   └── src/
 │       └── lib.rs   # proc macro implementation
@@ -228,7 +228,7 @@ sdk-rs/
 2. **不跨 FFI unwind** — Rust panic 绝不穿透 FFI 边界
 3. **allocator 不跨边界** — Rust 分配的由 Rust 释放，Java 分配的由 Java 释放
 4. **字符串用 arena** — 所有字符串在指定 arena 内分配，生命周期明确
-5. **版本协商前置** — `ferrum_init` 时交换 ABI 版本号
+5. **版本协商前置** — `morrow_init` 时交换 ABI 版本号
 
 ### 3.2 导出函数清单
 
@@ -238,18 +238,18 @@ sdk-rs/
 // 初始化 runtime，返回 runtime handle
 // 参数：abi_version (输入), arena (用于返回数据的临时内存)
 // 返回：runtime_handle (u64 opaque), 0 表示失败
-uint64_t ferrum_init(uint32_t abi_version, uint64_t arena_handle);
+uint64_t morrow_init(uint32_t abi_version, uint64_t arena_handle);
 
 // 关闭 runtime
 // 参数：runtime_handle
 // 返回：0 成功，非零错误码
-uint32_t ferrum_shutdown(uint64_t runtime_handle);
+uint32_t morrow_shutdown(uint64_t runtime_handle);
 
 // ──── Mod Management ────
 
-// 加载一个 mod（从 .ferrum 包路径）
+// 加载一个 mod（从 .morrow 包路径）
 // 返回：mod_handle (u64 opaque), 0 表示失败
-uint64_t ferrum_load_mod(uint64_t runtime_handle,
+uint64_t morrow_load_mod(uint64_t runtime_handle,
                           uint64_t mod_path_str_ptr,
                           uint32_t mod_path_str_len);
 
@@ -258,7 +258,7 @@ uint64_t ferrum_load_mod(uint64_t runtime_handle,
 // 分发事件到所有已注册 mod
 // event_data: JSON 或二进制 encoded event
 // 返回：处理该事件的 mod 数量
-uint32_t ferrum_dispatch_event(uint64_t runtime_handle,
+uint32_t morrow_dispatch_event(uint64_t runtime_handle,
                                 uint64_t event_type_str_ptr,
                                 uint32_t event_type_str_len,
                                 uint64_t event_data_ptr,
@@ -267,17 +267,17 @@ uint32_t ferrum_dispatch_event(uint64_t runtime_handle,
 // ──── Tick ────
 
 // 每 tick 调用，驱动 mod 的 on_tick
-void ferrum_tick(uint64_t runtime_handle);
+void morrow_tick(uint64_t runtime_handle);
 
 // ──── Error Channel ────
 
 // 获取最后一个错误（panic / error 信息）
 // 返回 error_handle，0 表示无错误
-uint64_t ferrum_last_error(uint64_t runtime_handle);
+uint64_t morrow_last_error(uint64_t runtime_handle);
 
 // 读取 error 详情
 // 将 error message 写入 buffer
-uint32_t ferrum_error_message(uint64_t error_handle,
+uint32_t morrow_error_message(uint64_t error_handle,
                                uint64_t buffer_ptr,
                                uint32_t buffer_capacity);
 ```
@@ -321,7 +321,7 @@ fn allocate_handle<T>(obj: T, registry: &Mutex<HashMap<Handle, T>>) -> Handle {
                     │  Error  │
                     │ Channel │
                     └────┬────┘
-                          │ ferrum_last_error()
+                          │ morrow_last_error()
                           ▼
                     ┌─────────┐
                     │  Java   │
@@ -343,7 +343,7 @@ fn allocate_handle<T>(obj: T, registry: &Mutex<HashMap<Handle, T>>) -> Handle {
                     ┌──────────┐
                     │  Created │
                     └────┬─────┘
-                         │ ferrum_init()
+                         │ morrow_init()
                          ▼
                     ┌──────────┐
                     │   Init   │─── panic → Error Channel
@@ -353,7 +353,7 @@ fn allocate_handle<T>(obj: T, registry: &Mutex<HashMap<Handle, T>>) -> Handle {
                     ┌──────────┐
               ┌────▶│  Ready   │
               │     └────┬─────┘
-              │          │ ferrum_tick() (每 tick)
+              │          │ morrow_tick() (每 tick)
               │          ▼
               │     ┌──────────┐
               │     │  Ticking │─── mod panic → quarantine mod
@@ -364,7 +364,7 @@ fn allocate_handle<T>(obj: T, registry: &Mutex<HashMap<Handle, T>>) -> Handle {
               │     │  Ready   │───────▶ next tick
               │     └──────────┘
               │
-              │     ferrum_shutdown()
+              │     morrow_shutdown()
               │          │
               │          ▼
               │     ┌──────────┐
@@ -382,19 +382,19 @@ fn allocate_handle<T>(obj: T, registry: &Mutex<HashMap<Handle, T>>) -> Handle {
 ```rust
 pub trait ModLifecycle {
     /// 模组加载时调用（注册事件监听器等）
-    fn on_init(&mut self, ctx: &mut Context) -> Result<(), FerrumError>;
+    fn on_init(&mut self, ctx: &mut Context) -> Result<(), MorrowError>;
 
     /// 服务端启动完成
-    fn on_server_start(&mut self, ctx: &mut Context) -> Result<(), FerrumError>;
+    fn on_server_start(&mut self, ctx: &mut Context) -> Result<(), MorrowError>;
 
     /// 每游戏 tick（20 TPS = 每 50ms）
-    fn on_tick(&mut self, ctx: &mut Context, tick: u64) -> Result<(), FerrumError>;
+    fn on_tick(&mut self, ctx: &mut Context, tick: u64) -> Result<(), MorrowError>;
 
     /// 服务端关闭
-    fn on_server_stop(&mut self, ctx: &mut Context) -> Result<(), FerrumError>;
+    fn on_server_stop(&mut self, ctx: &mut Context) -> Result<(), MorrowError>;
 
     /// 模组卸载
-    fn on_shutdown(&mut self, ctx: &mut Context) -> Result<(), FerrumError>;
+    fn on_shutdown(&mut self, ctx: &mut Context) -> Result<(), MorrowError>;
 }
 ```
 
@@ -407,32 +407,32 @@ JVM Start
 Fabric Loader init
   │
   ▼
-FerrumHostMod.onInitialize()
+MorrowHostMod.onInitialize()
   │
   ├─ 1. Platform detection (os/arch)
-  ├─ 2. NativeLibraryLoader.load("ferrum_runtime")
+  ├─ 2. NativeLibraryLoader.load("morrow_runtime")
   ├─ 3. PanamaBridge.setup()
   │     ├─ SymbolLookup → find exported fns
   │     └─ Create downcall MethodHandles
-  ├─ 4. ferrum_init(ABI_VERSION, arena)
+  ├─ 4. morrow_init(ABI_VERSION, arena)
   │     └─ Runtime kernel initialized
-  ├─ 5. Scan mods/ directory for .ferrum packages
-  ├─ 6. For each .ferrum:
+  ├─ 5. Scan mods/ directory for .morrow packages
+  ├─ 6. For each .morrow:
   │     ├─ Parse manifest.toml
   │     ├─ Platform artifact selection
-  │     └─ ferrum_load_mod(path)
+  │     └─ morrow_load_mod(path)
   ├─ 7. Dispatch on_server_start
   │
   ▼
 Game Loop
   │
   ├─ Tick 0 ... N
-  │   └─ ferrum_tick(runtime_handle)
+  │   └─ morrow_tick(runtime_handle)
   │
   ▼
 Server Stop
   │
-  └─ ferrum_shutdown(runtime_handle)
+  └─ morrow_shutdown(runtime_handle)
 ```
 
 ---
@@ -447,7 +447,7 @@ Server Stop
 │   生命周期：JVM 整个生命周期      │
 ├─────────────────────────────────┤
 │   Arena.ofConfined() per tick   │  ← Tick-scoped event data
-│   生命周期：单个 Minecraft tick   │     ferrum_tick() 调用期间
+│   生命周期：单个 Minecraft tick   │     morrow_tick() 调用期间
 ├─────────────────────────────────┤
 │   Arena.ofConfined() per event  │  ← 单次 event dispatch 的临时数据
 │   生命周期：单次 dispatch 调用    │
@@ -458,8 +458,8 @@ Server Stop
 
 | 数据 | 分配方 | 释放方 | 机制 |
 |------|--------|--------|------|
-| Runtime state | Rust | Rust (ferrum_shutdown) | Rust ownership |
-| Mod instances | Rust (via dlopen) | Rust (ferrum_shutdown) | Rust ownership |
+| Runtime state | Rust | Rust (morrow_shutdown) | Rust ownership |
+| Mod instances | Rust (via dlopen) | Rust (morrow_shutdown) | Rust ownership |
 | Event data | Java (Arena) | Java (Arena.close) | Arena scope |
 | Strings (to Rust) | Java (Arena) | Java (Arena.close) | Arena scope, Rust 只读 |
 | Strings (to Java) | Rust (Arena) | Java (Arena.close) | 写入 Java 提供的 buffer |
@@ -479,12 +479,12 @@ try (Arena arena = Arena.ofConfined()) {
     pos.set(ValueLayout.JAVA_DOUBLE, 0, x);
     pos.set(ValueLayout.JAVA_DOUBLE, 8, y);
     pos.set(ValueLayout.JAVA_DOUBLE, 16, z);
-    ferrum_tick_position(runtime_handle, pos); // pass segment to Rust
+    morrow_tick_position(runtime_handle, pos); // pass segment to Rust
 }
 
 // Rust:
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_tick_position(
+pub extern "C" fn morrow_tick_position(
     runtime_handle: u64,
     pos_ptr: *const f64, // Direct pointer to Java off-heap memory
 ) {
@@ -498,10 +498,10 @@ pub extern "C" fn ferrum_tick_position(
 
 ## 六、包格式（优化版）
 
-### 6.1 `.ferrum` 包结构
+### 6.1 `.morrow` 包结构
 
 ```
-example-mod.ferrum  (ZIP compressed, store method for speed)
+example-mod.morrow  (ZIP compressed, store method for speed)
 │
 ├── manifest.toml           # 包元数据
 ├── windows-x86_64/
@@ -521,11 +521,11 @@ example-mod.ferrum  (ZIP compressed, store method for speed)
 [package]
 name = "example-mod"
 version = "0.1.0"
-description = "An example Ferrum mod"
+description = "An example Morrow mod"
 authors = ["dev <dev@example.com>"]
 license = "MIT"
 
-[ferrum]
+[morrow]
 api_version = 1
 min_runtime = "0.1.0"
 
@@ -534,16 +534,16 @@ version = ">=1.20.1, <1.22"
 loader = "fabric"
 
 [entry]
-symbol = "ferrum_mod_init"  # Rust extern "C" entry point
+symbol = "morrow_mod_init"  # Rust extern "C" entry point
 
-[dependencies]  # 可选：依赖其他 Ferrum mod
+[dependencies]  # 可选：依赖其他 Morrow mod
 # other-mod = ">=1.0.0"
 ```
 
 ### 6.3 加载流程
 
 ```
-1. Java host 扫描 mods/*.ferrum
+1. Java host 扫描 mods/*.morrow
 2. 对每个包：
    a. 解压 manifest.toml (ZIP 随机访问)
    b. 解析 manifest → 验证 api_version 兼容
@@ -566,7 +566,7 @@ Layer 1: Mod panic
   └─ error → Java log + error channel
 
 Layer 2: Runtime panic
-  ├─ catch_unwind at ferrum_dispatch_event boundary
+  ├─ catch_unwind at morrow_dispatch_event boundary
   ├─ 整个 runtime 进入 degraded mode
   └─ error → Java log + attempt recovery
 
@@ -620,7 +620,7 @@ pub fn dispatch_to_mod(
 ```rust
 // ✅ 正确：所有 extern "C" 函数内部都有 catch_unwind
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_tick(runtime_handle: u64) {
+pub extern "C" fn morrow_tick(runtime_handle: u64) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // real tick logic
     }));
@@ -681,12 +681,12 @@ Mod 启动时：
 ### 9.1 开发流程
 
 ```
-ferrum/
-├── runtime-rs/        cargo build → target/release/libferrum_runtime.so
+morrow/
+├── runtime-rs/        cargo build → target/release/libmorrow_runtime.so
 ├── sdk-rs/            cargo build (rlib, 被 mod 依赖)
 ├── bridge-java/       gradle build → fabric mod .jar
 ├── examples/
-│   └── hello-ferrum/  cargo build → .ferrum package
+│   └── hello-morrow/  cargo build → .morrow package
 ```
 
 ### 9.2 完整构建命令
@@ -696,16 +696,16 @@ ferrum/
 cd runtime-rs && cargo build --release
 
 # 2. Copy .so to Java project
-cp target/release/libferrum_runtime.so ../bridge-java/fabric-host/src/main/resources/natives/
+cp target/release/libmorrow_runtime.so ../bridge-java/fabric-host/src/main/resources/natives/
 
 # 3. Build Java bridge (Gradle + Loom)
 cd ../bridge-java/fabric-host && ./gradlew build
 
 # 4. Build example mod
-cd ../../examples/hello-ferrum && cargo build --release --target x86_64-unknown-linux-gnu
+cd ../../examples/hello-morrow && cargo build --release --target x86_64-unknown-linux-gnu
 
-# 5. Package as .ferrum
-ferrum-cli package ./hello-ferrum
+# 5. Package as .morrow
+morrow-cli package ./hello-morrow
 ```
 
 ### 9.3 CI 矩阵
@@ -743,7 +743,7 @@ strategy:
 **目标：** Runtime 骨架能 init/shutdown
 
 **交付物：**
-- [ ] `ferrum_init()` / `ferrum_shutdown()` 导出
+- [ ] `morrow_init()` / `morrow_shutdown()` 导出
 - [ ] Runtime state machine 实现
 - [ ] Opaque handle 分配/释放
 - [ ] 从 Java 加载 .so 并调用 init/shutdown
@@ -755,16 +755,16 @@ strategy:
 
 ### Milestone 2: Fabric Integration
 
-**目标：** 在 Minecraft 里启动 Ferrum
+**目标：** 在 Minecraft 里启动 Morrow
 
 **交付物：**
-- [ ] Fabric mod 骨架（FerrumHostMod）
+- [ ] Fabric mod 骨架（MorrowHostMod）
 - [ ] Native library 自动发现与加载
 - [ ] Panama Bridge 初始化
-- [ ] 生命周期 hook：JVM start → ferrum_init
-- [ ] 游戏启动时 log 输出 "Ferrum initialized"
+- [ ] 生命周期 hook：JVM start → morrow_init
+- [ ] 游戏启动时 log 输出 "Morrow initialized"
 
-**验收标准：** Minecraft 启动，日志中看到 `[Ferrum] Runtime initialized`
+**验收标准：** Minecraft 启动，日志中看到 `[Morrow] Runtime initialized`
 
 ---
 
@@ -773,9 +773,9 @@ strategy:
 **目标：** 加载第一个 Rust 写的 Minecraft Mod
 
 **交付物：**
-- [ ] `.ferrum` 包格式实现（ZIP + manifest 解析）
+- [ ] `.morrow` 包格式实现（ZIP + manifest 解析）
 - [ ] 平台 artifact 选择逻辑
-- [ ] `ferrum_load_mod()` 完整实现
+- [ ] `morrow_load_mod()` 完整实现
 - [ ] Mod registry
 - [ ] 示例 mod：输出 "Hello from Rust!" 到 Minecraft log
 
@@ -803,7 +803,7 @@ strategy:
 **目标：** 提升开发者体验
 
 **交付物：**
-- [ ] `#[ferrum::mod_main]` proc macro
+- [ ] `#[morrow::mod_main]` proc macro
 - [ ] `Context` API 稳定
 - [ ] Event listener derive macro
 - [ ] 文档 + 示例
@@ -851,7 +851,7 @@ strategy:
 - [ ] 文档（API docs + getting started）
 - [ ] >= 3 个示例 mod
 - [ ] CI/CD pipeline
-- [ ] Ferrum 1.0.0 发布
+- [ ] Morrow 1.0.0 发布
 
 ---
 

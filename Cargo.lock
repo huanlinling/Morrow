@@ -96,7 +96,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 name = "chat-bot"
 version = "0.1.0"
 dependencies = [
- "ferrum",
+ "morrow",
 ]
 
 [[package]]
@@ -232,33 +232,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
-name = "ferrum"
-version = "0.1.0"
-dependencies = [
- "ferrum-macros",
-]
-
-[[package]]
-name = "ferrum-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "ferrum-runtime"
-version = "0.1.0"
-dependencies = [
- "libloading",
- "serde",
- "tempfile",
- "toml",
- "zip",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -316,10 +289,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
-name = "hello-ferrum"
+name = "hello-morrow"
 version = "0.1.0"
 dependencies = [
- "ferrum",
+ "morrow",
 ]
 
 [[package]]
@@ -433,6 +406,33 @@ checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "morrow"
+version = "0.1.0"
+dependencies = [
+ "morrow-macros",
+]
+
+[[package]]
+name = "morrow-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "morrow-runtime"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "serde",
+ "tempfile",
+ "toml",
+ "zip",
 ]
 
 [[package]]

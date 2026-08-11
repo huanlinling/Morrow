@@ -1,16 +1,16 @@
-//! # Ferrum SDK
+//! # Morrow SDK
 //!
-//! Write Minecraft mods in Rust. Ferrum compiles your code to a native
+//! Write Minecraft mods in Rust. Morrow compiles your code to a native
 //! library, loaded by the Fabric host adapter via Panama FFI.
 //!
 //! ## Quick Start
 //!
 //! ```ignore
-//! use ferrum::prelude::*;
+//! use morrow::prelude::*;
 //!
-//! #[ferrum::mod_main]
-//! fn init(ctx: &mut Context, api: *const RuntimeApi) -> Result<(), FerrumError> {
-//!     ferrum::info!("Hello from Rust!");
+//! #[morrow::mod_main]
+//! fn init(ctx: &mut Context, api: *const RuntimeApi) -> Result<(), MorrowError> {
+//!     morrow::info!("Hello from Rust!");
 //!     Ok(())
 //! }
 //! ```
@@ -36,34 +36,34 @@
 //!
 //! | Export | Signature | Called when |
 //! |--------|-----------|-------------|
-//! | `ferrum_mod_tick` | `fn(u64)` | Every game tick (20 TPS) |
-//! | `ferrum_mod_server_start` | `fn()` | Server finished starting |
-//! | `ferrum_mod_server_stop` | `fn()` | Server begins stopping |
-//! | `ferrum_mod_player_join` | `fn(*const u8, u32)` | Player joins |
-//! | `ferrum_mod_player_leave` | `fn(*const u8, u32)` | Player leaves |
-//! | `ferrum_mod_chat_message` | `fn(*const u8, u32, *const u8, u32)` | Chat message sent |
-//! | `ferrum_mod_block_break` | `fn(*const u8, u32, *const u8, u32)` | Block broken |
-//! | `ferrum_mod_block_place` | `fn(*const u8, u32, *const u8, u32)` | Block placed |
-//! | `ferrum_mod_player_death` | `fn(*const u8, u32, *const u8, u32)` | Player dies |
+//! | `morrow_mod_tick` | `fn(u64)` | Every game tick (20 TPS) |
+//! | `morrow_mod_server_start` | `fn()` | Server finished starting |
+//! | `morrow_mod_server_stop` | `fn()` | Server begins stopping |
+//! | `morrow_mod_player_join` | `fn(*const u8, u32)` | Player joins |
+//! | `morrow_mod_player_leave` | `fn(*const u8, u32)` | Player leaves |
+//! | `morrow_mod_chat_message` | `fn(*const u8, u32, *const u8, u32)` | Chat message sent |
+//! | `morrow_mod_block_break` | `fn(*const u8, u32, *const u8, u32)` | Block broken |
+//! | `morrow_mod_block_place` | `fn(*const u8, u32, *const u8, u32)` | Block placed |
+//! | `morrow_mod_player_death` | `fn(*const u8, u32, *const u8, u32)` | Player dies |
 
 pub mod context;
 pub mod error;
 pub mod runtime_api;
 
 // Re-export the proc macro
-pub use ferrum_macros::mod_main;
+pub use morrow_macros::mod_main;
 
 // Re-export commonly used types
 pub use context::Context;
-pub use error::FerrumError;
+pub use error::MorrowError;
 pub use runtime_api::RuntimeApi;
 
 /// Prelude: everything most mods need.
 pub mod prelude {
     pub use crate::context::Context;
-    pub use crate::error::FerrumError;
+    pub use crate::error::MorrowError;
     pub use crate::runtime_api::RuntimeApi;
-    pub use ferrum_macros::mod_main;
+    pub use morrow_macros::mod_main;
     pub use crate::{info, warn, error};
 }
 

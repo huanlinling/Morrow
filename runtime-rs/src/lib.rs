@@ -1,4 +1,4 @@
-//! Ferrum Runtime Core
+//! Morrow Runtime Core
 //!
 //! This is the Rust cdylib loaded by the Java host via Panama FFM.
 //! All public symbols are `extern "C"` and use the platform C ABI.
@@ -39,11 +39,11 @@ pub extern "C" fn add(a: i32, b: i32) -> i32 {
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_init(abi_version: u32) -> u64 {
+pub extern "C" fn morrow_init(abi_version: u32) -> u64 {
     panic::ffi_boundary(0, || {
         if !abi::is_abi_compatible(abi_version, abi::ABI_VERSION) {
             eprintln!(
-                "[Ferrum] ABI version mismatch: requested {abi_version:#010x}, \
+                "[Morrow] ABI version mismatch: requested {abi_version:#010x}, \
                  runtime {:#010x}",
                 abi::ABI_VERSION
             );
@@ -57,7 +57,7 @@ pub extern "C" fn ferrum_init(abi_version: u32) -> u64 {
         register_mod_registry(handle.as_u64());
 
         eprintln!(
-            "[Ferrum] Runtime initialized (ABI {abi_version:#010x}, handle={})",
+            "[Morrow] Runtime initialized (ABI {abi_version:#010x}, handle={})",
             handle.as_u64()
         );
         handle.as_u64()
@@ -65,12 +65,12 @@ pub extern "C" fn ferrum_init(abi_version: u32) -> u64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_shutdown(runtime_handle: u64) -> u32 {
+pub extern "C" fn morrow_shutdown(runtime_handle: u64) -> u32 {
     panic::ffi_boundary(abi::RESULT_ERR_PANIC, || {
         let handle = match abi::handles::Handle::from_u64(runtime_handle) {
             Some(h) => h,
             None => {
-                eprintln!("[Ferrum] ferrum_shutdown: invalid handle 0");
+                eprintln!("[Morrow] morrow_shutdown: invalid handle 0");
                 return abi::RESULT_ERR_INVALID_HANDLE;
             }
         };
@@ -79,7 +79,7 @@ pub extern "C" fn ferrum_shutdown(runtime_handle: u64) -> u32 {
             Some(k) => k,
             None => {
                 eprintln!(
-                    "[Ferrum] ferrum_shutdown: handle {} not found",
+                    "[Morrow] morrow_shutdown: handle {} not found",
                     handle.as_u64()
                 );
                 return abi::RESULT_ERR_INVALID_HANDLE;
@@ -87,7 +87,7 @@ pub extern "C" fn ferrum_shutdown(runtime_handle: u64) -> u32 {
         };
 
         if let Err(state) = kernel.begin_shutdown() {
-            eprintln!("[Ferrum] ferrum_shutdown: illegal state transition from {state}");
+            eprintln!("[Morrow] morrow_shutdown: illegal state transition from {state}");
             RUNTIMES.insert(kernel);
             return abi::RESULT_ERR_WRONG_STATE;
         }
@@ -96,17 +96,17 @@ pub extern "C" fn ferrum_shutdown(runtime_handle: u64) -> u32 {
         if let Some(registry) = remove_mod_registry(handle.as_u64()) {
             let count = registry.len();
             if count > 0 {
-                eprintln!("[Ferrum] Unloaded {count} mod(s)");
+                eprintln!("[Morrow] Unloaded {count} mod(s)");
             }
             // registry drops here → libraries unloaded
         }
 
         if let Err(state) = kernel.finish_shutdown() {
-            eprintln!("[Ferrum] ferrum_shutdown: finish_shutdown failed from {state}");
+            eprintln!("[Morrow] morrow_shutdown: finish_shutdown failed from {state}");
             return abi::RESULT_ERR_WRONG_STATE;
         }
 
-        eprintln!("[Ferrum] Runtime shut down (handle={})", handle.as_u64());
+        eprintln!("[Morrow] Runtime shut down (handle={})", handle.as_u64());
         abi::RESULT_OK
     })
 }
@@ -115,10 +115,10 @@ pub extern "C" fn ferrum_shutdown(runtime_handle: u64) -> u32 {
 // M3: Mod loading
 // ---------------------------------------------------------------------------
 
-/// Load a `.ferrum` package into the given runtime.
+/// Load a `.morrow` package into the given runtime.
 ///
 /// # Parameters
-/// - `runtime_handle`: handle from [`ferrum_init`]
+/// - `runtime_handle`: handle from [`morrow_init`]
 /// - `path_ptr`: pointer to UTF-8 path string
 /// - `path_len`: length of the path string in bytes
 ///
@@ -126,7 +126,7 @@ pub extern "C" fn ferrum_shutdown(runtime_handle: u64) -> u32 {
 /// - `0` on success
 /// - Non-zero error code on failure
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_load_mod(
+pub extern "C" fn morrow_load_mod(
     runtime_handle: u64,
     path_ptr: *const u8,
     path_len: u32,
@@ -144,13 +144,13 @@ pub extern "C" fn ferrum_load_mod(
         let path_str = match std::str::from_utf8(path_bytes) {
             Ok(s) => s,
             Err(_) => {
-                eprintln!("[Ferrum] ferrum_load_mod: invalid UTF-8 in path");
+                eprintln!("[Morrow] morrow_load_mod: invalid UTF-8 in path");
                 return abi::RESULT_ERR_UNKNOWN;
             }
         };
 
         let package_path = Path::new(path_str);
-        eprintln!("[Ferrum] ferrum_load_mod: {}", package_path.display());
+        eprintln!("[Morrow] morrow_load_mod: {}", package_path.display());
 
         // Look up the mod registry for this runtime handle.
         match MOD_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
@@ -162,25 +162,25 @@ pub extern "C" fn ferrum_load_mod(
                         if let Some(ref cfg) = config_data {
                             if let Some(store) = CONFIG_STORES.lock().unwrap().get(&handle.as_u64()) {
                                 store.insert(&name, cfg.clone());
-                                eprintln!("[Ferrum]   Config loaded ({} bytes)", cfg.len());
+                                eprintln!("[Morrow]   Config loaded ({} bytes)", cfg.len());
                             }
                         }
                         if let Some(cb) = exports.tick_callback {
                             if let Some(reg) = TICK_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
                                 reg.register(&name, cb);
-                                eprintln!("[Ferrum]   Registered tick callback for '{name}'");
+                                eprintln!("[Morrow]   Registered tick callback for '{name}'");
                             }
                         }
                         if let Some(cb) = exports.server_start_callback {
                             if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
                                 reg.server_start.insert(name.clone(), cb);
-                                eprintln!("[Ferrum]   Registered server_start for '{name}'");
+                                eprintln!("[Morrow]   Registered server_start for '{name}'");
                             }
                         }
                         if let Some(cb) = exports.server_stop_callback {
                             if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
                                 reg.server_stop.insert(name.clone(), cb);
-                                eprintln!("[Ferrum]   Registered server_stop for '{name}'");
+                                eprintln!("[Morrow]   Registered server_stop for '{name}'");
                             }
                         }
 
@@ -188,42 +188,42 @@ pub extern "C" fn ferrum_load_mod(
                         if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get_mut(&handle.as_u64()) {
                             if let Some(cb) = exports.player_join_callback {
                                 cbs.player_join.insert(name.clone(), cb);
-                                eprintln!("[Ferrum]   Registered player_join for '{name}'");
+                                eprintln!("[Morrow]   Registered player_join for '{name}'");
                             }
                             if let Some(cb) = exports.player_leave_callback {
                                 cbs.player_leave.insert(name.clone(), cb);
-                                eprintln!("[Ferrum]   Registered player_leave for '{name}'");
+                                eprintln!("[Morrow]   Registered player_leave for '{name}'");
                             }
                             if let Some(cb) = exports.chat_message_callback {
                                 cbs.chat_message.insert(name.clone(), cb);
-                                eprintln!("[Ferrum]   Registered chat_message for '{name}'");
+                                eprintln!("[Morrow]   Registered chat_message for '{name}'");
                             }
                             if let Some(cb) = exports.block_break_callback {
                                 cbs.block_break.insert(name.clone(), cb);
-                                eprintln!("[Ferrum]   Registered block_break for '{name}'");
+                                eprintln!("[Morrow]   Registered block_break for '{name}'");
                             }
                             if let Some(cb) = exports.block_place_callback {
                                 cbs.block_place.insert(name.clone(), cb);
-                                eprintln!("[Ferrum]   Registered block_place for '{name}'");
+                                eprintln!("[Morrow]   Registered block_place for '{name}'");
                             }
                             if let Some(cb) = exports.player_death_callback {
                                 cbs.player_death.insert(name.clone(), cb);
-                                eprintln!("[Ferrum]   Registered player_death for '{name}'");
+                                eprintln!("[Morrow]   Registered player_death for '{name}'");
                             }
                         }
 
-                        eprintln!("[Ferrum] Mod '{name}' loaded successfully");
+                        eprintln!("[Morrow] Mod '{name}' loaded successfully");
                         abi::RESULT_OK
                     }
                     Err(e) => {
-                        eprintln!("[Ferrum] Failed to load mod: {e}");
-                        record_error(handle.as_u64(), format!("ferrum_load_mod: {e}"));
+                        eprintln!("[Morrow] Failed to load mod: {e}");
+                        record_error(handle.as_u64(), format!("morrow_load_mod: {e}"));
                         abi::RESULT_ERR_UNKNOWN
                     }
                 }
             }
             None => {
-                eprintln!("[Ferrum] ferrum_load_mod: no mod registry for runtime {handle:?}");
+                eprintln!("[Morrow] morrow_load_mod: no mod registry for runtime {handle:?}");
                 abi::RESULT_ERR_INVALID_HANDLE
             }
         }
@@ -236,7 +236,7 @@ pub extern "C" fn ferrum_load_mod(
 
 /// Drive one tick cycle — dispatches to all registered mod tick callbacks.
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_tick(runtime_handle: u64, tick_number: u64) {
+pub extern "C" fn morrow_tick(runtime_handle: u64, tick_number: u64) {
     panic::ffi_boundary((), || {
         let handle = match abi::handles::Handle::from_u64(runtime_handle) {
             Some(h) => h,
@@ -250,7 +250,7 @@ pub extern "C" fn ferrum_tick(runtime_handle: u64, tick_number: u64) {
                 if let Some(q) = QUARANTINES.lock().unwrap().get(&handle.as_u64()) {
                     for name in &panicked {
                         q.add(name);
-                        eprintln!("[Ferrum] Mod '{name}' quarantined after panic");
+                        eprintln!("[Morrow] Mod '{name}' quarantined after panic");
                     }
                 }
             }
@@ -330,7 +330,7 @@ fn remove_mod_registry(handle: u64) -> Option<ModRegistry> {
 
 /// Register the Java host function table (upcall stubs).
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_register_host_api(
+pub extern "C" fn morrow_register_host_api(
     runtime_handle: u64,
     vtable_ptr: *const host_api::HostVtable,
 ) {
@@ -338,7 +338,7 @@ pub extern "C" fn ferrum_register_host_api(
         if vtable_ptr.is_null() { return; }
         if let Some(api) = HOST_APIS.lock().unwrap().get(&runtime_handle) {
             api.set_vtable(vtable_ptr);
-            eprintln!("[Ferrum] Host API registered");
+            eprintln!("[Morrow] Host API registered");
         }
     })
 }
@@ -348,7 +348,7 @@ pub extern "C" fn ferrum_register_host_api(
 /// If `runtime_handle` is 0, uses the first available runtime.
 /// Returns -1 if the host API isn't registered yet.
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_get_player_count(runtime_handle: u64) -> i32 {
+pub extern "C" fn morrow_get_player_count(runtime_handle: u64) -> i32 {
     panic::ffi_boundary(-1, || {
         let apis = HOST_APIS.lock().unwrap();
         let api = if runtime_handle == 0 {
@@ -372,13 +372,13 @@ fn record_error(handle: u64, msg: impl Into<String>) {
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_handle_count() -> u64 {
+pub extern "C" fn morrow_handle_count() -> u64 {
     panic::ffi_boundary(0, || RUNTIMES.len() as u64)
 }
 
 /// Return the number of loaded mods across all runtimes.
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_mod_count() -> u64 {
+pub extern "C" fn morrow_mod_count() -> u64 {
     panic::ffi_boundary(0, || {
         MOD_REGISTRIES.lock().unwrap().values().map(|r| r.len()).sum::<usize>() as u64
     })
@@ -386,7 +386,7 @@ pub extern "C" fn ferrum_mod_count() -> u64 {
 
 /// Return the number of quarantined mods (panicked and isolated).
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_quarantined_count() -> u64 {
+pub extern "C" fn morrow_quarantined_count() -> u64 {
     panic::ffi_boundary(0, || {
         QUARANTINES.lock().unwrap().values().map(|q| q.count()).sum::<usize>() as u64
     })
@@ -398,7 +398,7 @@ pub extern "C" fn ferrum_quarantined_count() -> u64 {
 
 /// Send a chat message via Java upcall.
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_send_message(
+pub extern "C" fn morrow_send_message(
     runtime_handle: u64,
     msg_ptr: *const u8,
     msg_len: u32,
@@ -425,7 +425,7 @@ pub extern "C" fn ferrum_send_message(
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_get_player_list(
+pub extern "C" fn morrow_get_player_list(
     runtime_handle: u64,
     buf: *mut u8,
     buf_cap: u32,
@@ -439,7 +439,7 @@ pub extern "C" fn ferrum_get_player_list(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_execute_command(
+pub extern "C" fn morrow_execute_command(
     runtime_handle: u64,
     cmd_ptr: *const u8,
     cmd_len: u32,
@@ -458,7 +458,7 @@ pub extern "C" fn ferrum_execute_command(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_get_world_time(runtime_handle: u64) -> i64 {
+pub extern "C" fn morrow_get_world_time(runtime_handle: u64) -> i64 {
     panic::ffi_boundary(-1, || {
         let apis = HOST_APIS.lock().unwrap();
         let api = if runtime_handle == 0 { apis.values().next() } else { apis.get(&runtime_handle) };
@@ -485,7 +485,7 @@ static CAPABILITIES: LazyLock<HashMap<&'static str, u32>> = LazyLock::new(|| {
 });
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_request_capability(
+pub extern "C" fn morrow_request_capability(
     _runtime_handle: u64,
     cap_ptr: *const u8,
     cap_len: u32,
@@ -504,7 +504,7 @@ pub extern "C" fn ferrum_request_capability(
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_get_mod_config(
+pub extern "C" fn morrow_get_mod_config(
     runtime_handle: u64,
     mod_name_ptr: *const u8, mod_name_len: u32,
     buf: *mut u8, buf_cap: u32,
@@ -533,7 +533,7 @@ pub extern "C" fn ferrum_get_mod_config(
 
 /// Register a command (called by mods during init via RuntimeApi).
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_register_command(
+pub extern "C" fn morrow_register_command(
     runtime_handle: u64,
     name_ptr: *const u8,
     name_len: u32,
@@ -552,7 +552,7 @@ pub extern "C" fn ferrum_register_command(
         };
         if let Some(reg) = reg {
             reg.register(name, callback);
-            eprintln!("[Ferrum] Command registered: /{name}");
+            eprintln!("[Morrow] Command registered: /{name}");
         }
     })
 }
@@ -560,7 +560,7 @@ pub extern "C" fn ferrum_register_command(
 /// Dispatch a command from Java to registered Rust callbacks.
 /// Returns 1 if handled, 0 if no handler found.
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_dispatch_command(
+pub extern "C" fn morrow_dispatch_command(
     runtime_handle: u64,
     name_ptr: *const u8,
     name_len: u32,
@@ -609,16 +609,16 @@ macro_rules! dispatch_two_str_event {
     };
 }
 
-dispatch_two_str_event!(ferrum_dispatch_block_break, block_break);
-dispatch_two_str_event!(ferrum_dispatch_block_place, block_place);
-dispatch_two_str_event!(ferrum_dispatch_player_death, player_death);
+dispatch_two_str_event!(morrow_dispatch_block_break, block_break);
+dispatch_two_str_event!(morrow_dispatch_block_place, block_place);
+dispatch_two_str_event!(morrow_dispatch_player_death, player_death);
 
 // ---------------------------------------------------------------------------
 // Event dispatch: PlayerJoin, PlayerLeave, Chat
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_dispatch_player_join(
+pub extern "C" fn morrow_dispatch_player_join(
     runtime_handle: u64,
     name_ptr: *const u8,
     name_len: u32,
@@ -636,7 +636,7 @@ pub extern "C" fn ferrum_dispatch_player_join(
 
 // Same pattern for player_leave and chat_message...
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_dispatch_player_leave(
+pub extern "C" fn morrow_dispatch_player_leave(
     runtime_handle: u64,
     name_ptr: *const u8,
     name_len: u32,
@@ -653,7 +653,7 @@ pub extern "C" fn ferrum_dispatch_player_leave(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_dispatch_chat_message(
+pub extern "C" fn morrow_dispatch_chat_message(
     runtime_handle: u64,
     player_ptr: *const u8, player_len: u32,
     msg_ptr: *const u8, msg_len: u32,
@@ -674,7 +674,7 @@ pub extern "C" fn ferrum_dispatch_chat_message(
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_dispatch_server_start(runtime_handle: u64) {
+pub extern "C" fn morrow_dispatch_server_start(runtime_handle: u64) {
     panic::ffi_boundary((), || {
         if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get(&runtime_handle) {
             for (name, cb) in &reg.server_start {
@@ -682,7 +682,7 @@ pub extern "C" fn ferrum_dispatch_server_start(runtime_handle: u64) {
                     unsafe { cb() };
                 }));
                 if let Err(p) = result {
-                    eprintln!("[Ferrum] Mod '{name}' panicked in server_start: {:?}",
+                    eprintln!("[Morrow] Mod '{name}' panicked in server_start: {:?}",
                         p.downcast_ref::<&str>().unwrap_or(&"<unknown>"));
                 }
             }
@@ -691,7 +691,7 @@ pub extern "C" fn ferrum_dispatch_server_start(runtime_handle: u64) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_dispatch_server_stop(runtime_handle: u64) {
+pub extern "C" fn morrow_dispatch_server_stop(runtime_handle: u64) {
     panic::ffi_boundary((), || {
         if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get(&runtime_handle) {
             for (_name, cb) in &reg.server_stop {
@@ -709,7 +709,7 @@ pub extern "C" fn ferrum_dispatch_server_stop(runtime_handle: u64) {
 
 /// Get the handle of the oldest pending error, or 0 if no errors.
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_last_error(runtime_handle: u64) -> u64 {
+pub extern "C" fn morrow_last_error(runtime_handle: u64) -> u64 {
     panic::ffi_boundary(0, || {
         ERROR_CHANNELS
             .lock().unwrap()
@@ -725,7 +725,7 @@ pub extern "C" fn ferrum_last_error(runtime_handle: u64) -> u64 {
 /// Returns the number of bytes written (excluding null terminator),
 /// or 0 if the error handle is not found.
 #[unsafe(no_mangle)]
-pub extern "C" fn ferrum_error_message(
+pub extern "C" fn morrow_error_message(
     error_handle: u64,
     runtime_handle: u64,
     buffer_ptr: *mut u8,

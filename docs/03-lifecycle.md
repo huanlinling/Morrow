@@ -7,7 +7,7 @@
               │       UNINITIALIZED      │
               │   Runtime 不存在          │
               └────────────┬────────────┘
-                           │ ferrum_init()
+                           │ morrow_init()
                            │ (ABI version check)
                            │ (Memory allocation)
                            ▼
@@ -25,7 +25,7 @@
               │   Runtime 就绪，等待 Mod   │               │
               │   load                    │               │
               └────────────┬────────────┘               │
-                           │ ferrum_load_mod()           │
+                           │ morrow_load_mod()           │
                            │ (可调用多次)                  │
                            ▼                             │
               ┌─────────────────────────┐               │
@@ -55,7 +55,7 @@
                            ▼                             │
               ┌─────────────────────────┐               │
               │        TICKING           │               │
-              │   ferrum_tick() 调用中    │───────────────┘
+              │   morrow_tick() 调用中    │───────────────┘
               │   - 分发 on_tick 事件     │   tick 结束
               │   - arena 分配临时内存     │   回到 RUNNING
               │   - catch_unwind 隔离    │
@@ -88,7 +88,7 @@
 
 ```rust
 /// Mod 必须实现的 trait
-pub trait FerrumMod: Send + Sync + 'static {
+pub trait MorrowMod: Send + Sync + 'static {
     /// 元数据
     fn metadata(&self) -> ModMetadata;
 
@@ -96,28 +96,28 @@ pub trait FerrumMod: Send + Sync + 'static {
 
     /// Mod 被加载并初始化
     /// 此时可以注册事件监听器、获取 capabilities
-    fn on_init(&mut self, ctx: &mut Context) -> Result<(), FerrumError> {
+    fn on_init(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
         Ok(())
     }
 
     /// 服务端启动完成，世界已加载
-    fn on_server_start(&mut self, ctx: &mut Context) -> Result<(), FerrumError> {
+    fn on_server_start(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
         Ok(())
     }
 
     /// 每个游戏 tick
     /// ⚠️ 必须在 <1ms 内返回！不要在此做 IO 或复杂计算
-    fn on_tick(&mut self, ctx: &mut Context, tick: u64) -> Result<(), FerrumError> {
+    fn on_tick(&mut self, ctx: &mut Context, tick: u64) -> Result<(), MorrowError> {
         Ok(())
     }
 
     /// 服务端即将停止，保存数据
-    fn on_server_stop(&mut self, ctx: &mut Context) -> Result<(), FerrumError> {
+    fn on_server_stop(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
         Ok(())
     }
 
     /// Mod 被卸载
-    fn on_shutdown(&mut self, ctx: &mut Context) -> Result<(), FerrumError> {
+    fn on_shutdown(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
         Ok(())
     }
 }
@@ -128,54 +128,54 @@ pub trait FerrumMod: Send + Sync + 'static {
 ```
 T=0ms    JVM 启动
 T=50ms   Fabric Loader 开始扫描 mods/
-T=100ms  Fabric 发现 FerrumHostMod (Java jar)
-T=150ms  FerrumMod.onInitialize() 被调用
+T=100ms  Fabric 发现 MorrowHostMod (Java jar)
+T=150ms  MorrowMod.onInitialize() 被调用
            │
-T=155ms    ├─ NativeLibraryLoader.load("ferrum_runtime")
+T=155ms    ├─ NativeLibraryLoader.load("morrow_runtime")
            │   ├─ 检测平台: os.name="Linux", os.arch="amd64"
            │   ├─ 搜索路径:
-           │   │   1. <jar>/natives/linux-x86_64/libferrum_runtime.so
-           │   │   2. mods/ferrum/native/linux-x86_64/libferrum_runtime.so
+           │   │   1. <jar>/natives/linux-x86_64/libmorrow_runtime.so
+           │   │   2. mods/morrow/native/linux-x86_64/libmorrow_runtime.so
            │   │   3. 系统库路径
            │   └─ System.load(path) → dlopen
            │
 T=160ms    ├─ PanamaBridge.setup()
            │   ├─ SymbolLookup.libraryLookup(path, Arena.global())
-           │   ├─ 查找所有需要的符号 (ferrum_init, ferrum_load_mod, ...)
+           │   ├─ 查找所有需要的符号 (morrow_init, morrow_load_mod, ...)
            │   └─ 创建 downcall MethodHandles
            │
-T=165ms    ├─ ferrum_init(ABI_VERSION=1)
+T=165ms    ├─ morrow_init(ABI_VERSION=1)
            │   ├─ Rust: 检查 ABI 版本
            │   ├─ Rust: 初始化 RuntimeKernel
            │   ├─ Rust: 返回 runtime_handle
-           │   └─ log: "[Ferrum] Runtime initialized (ABI v1)"
+           │   └─ log: "[Morrow] Runtime initialized (ABI v1)"
            │
 T=170ms    ├─ ModDiscovery.scan("mods/")
-           │   发现: mods/hello-ferrum.ferrum
+           │   发现: mods/hello-morrow.morrow
            │
-T=175ms    ├─ ferrum_load_mod(runtime_handle, "mods/hello-ferrum.ferrum")
+T=175ms    ├─ morrow_load_mod(runtime_handle, "mods/hello-morrow.morrow")
            │   ├─ Rust: 读取 ZIP 中的 manifest.toml
            │   ├─ Rust: 验证 api_version 兼容
            │   ├─ Rust: 选择 artifact: linux-x86_64/libmod.so
            │   ├─ Rust: 提取到临时目录
            │   ├─ Rust: dlopen(libmod.so)
-           │   ├─ Rust: 查找 ferrum_mod_init 符号
-           │   ├─ Rust: 调用 ferrum_mod_init(ModSdkVtable)
+           │   ├─ Rust: 查找 morrow_mod_init 符号
+           │   ├─ Rust: 调用 morrow_mod_init(ModSdkVtable)
            │   └─ Rust: 将 mod 注册到 Registry
-           │   └─ log: "[Ferrum] Loaded mod: hello-ferrum v0.1.0"
+           │   └─ log: "[Morrow] Loaded mod: hello-morrow v0.1.0"
            │
 T=200ms    Fabric 初始化完成
            │
 T=200ms+   Minecraft 启动完成，进入游戏循环
            │
-           ├─ Tick 0: ferrum_tick(runtime_handle)
+           ├─ Tick 0: morrow_tick(runtime_handle)
            │   └─ 分发 on_tick 到所有 mod
-           ├─ Tick 1: ferrum_tick(runtime_handle)
+           ├─ Tick 1: morrow_tick(runtime_handle)
            │   └─ 分发 on_tick
            ├─ ...
            │
            ▼  (server stop)
-T=∞       ferrum_shutdown(runtime_handle)
+T=∞       morrow_shutdown(runtime_handle)
            ├─ Rust: 遍历所有 mod，调用 on_shutdown
            ├─ Rust: 卸载所有动态库
            ├─ Rust: 释放所有 handle
@@ -197,8 +197,8 @@ T=∞       ferrum_shutdown(runtime_handle)
 
 ```rust
 // SDK 提供
-pub trait ModLifecycleExt: FerrumMod {
+pub trait ModLifecycleExt: MorrowMod {
     /// 注册为生命周期回调
-    fn register(self, ctx: &mut Context) -> Result<(), FerrumError>;
+    fn register(self, ctx: &mut Context) -> Result<(), MorrowError>;
 }
 ```

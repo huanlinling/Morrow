@@ -1,8 +1,8 @@
 //! Error channel — in-band error reporting across the FFI boundary.
 //!
 //! Errors are stored per-runtime in a queue. Java polls via:
-//! - `ferrum_last_error(runtime_handle)` → error_handle (0 = no error)
-//! - `ferrum_error_message(error_handle, buffer, buffer_cap)` → bytes written
+//! - `morrow_last_error(runtime_handle)` → error_handle (0 = no error)
+//! - `morrow_error_message(error_handle, buffer, buffer_cap)` → bytes written
 //!
 //! See docs/02-abi-design.md § "Error Channel".
 

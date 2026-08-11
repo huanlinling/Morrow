@@ -1,19 +1,19 @@
 {
     "schemaVersion": 1,
-    "id": "ferrum-host",
+    "id": "morrow-host",
     "version": "${version}",
-    "name": "Ferrum Host",
-    "description": "Ferrum Native Runtime Platform — Fabric host adapter. Loads the Rust runtime and dispatches events to native mods.",
-    "authors": ["Ferrum Contributors"],
+    "name": "Morrow Host",
+    "description": "Morrow Native Runtime Platform — Fabric host adapter. Loads the Rust runtime and dispatches events to native mods.",
+    "authors": ["Morrow Contributors"],
     "contact": {
-        "homepage": "https://github.com/ferrum-mc/ferrum",
-        "sources": "https://github.com/ferrum-mc/ferrum"
+        "homepage": "https://github.com/morrow-mc/morrow",
+        "sources": "https://github.com/morrow-mc/morrow"
     },
     "license": "MIT",
     "environment": "*",
     "entrypoints": {
         "main": [
-            "com.ferrum.host.FerrumMod"
+            "com.morrow.host.MorrowMod"
         ]
     },
     "depends": {
@@ -22,11 +22,11 @@
         "java": ">=21"
     },
     "custom": {
-        "ferrum": {
+        "morrow": {
             "abi_version": 65536,
             "native": {
-                "linux-x86_64": "natives/linux-x86_64/libferrum_runtime.so",
-                "windows-x86_64": "natives/windows-x86_64/ferrum_runtime.dll"
+                "linux-x86_64": "natives/linux-x86_64/libmorrow_runtime.so",
+                "windows-x86_64": "natives/windows-x86_64/morrow_runtime.dll"
             }
         }
     }

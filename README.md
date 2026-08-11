@@ -1,4 +1,4 @@
-# Ferrum
+# Morrow
 
 > Minecraft Native Runtime Platform — Write Minecraft mods in Rust, coexist with Java mods, zero compromise on performance.
 
@@ -6,15 +6,15 @@
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![JDK](https://img.shields.io/badge/JDK-21%2B-red.svg)](https://adoptium.net)
 
-## What is Ferrum?
+## What is Morrow?
 
-Ferrum is a **native runtime platform** that lets you write Minecraft mods in Rust, compiled to native code, running alongside existing Java mods on Fabric.
+Morrow is a **native runtime platform** that lets you write Minecraft mods in Rust, compiled to native code, running alongside existing Java mods on Fabric.
 
 - 🦀 **Rust SDK** — Write mods with proc macros and safe abstractions
 - 🧵 **Java coexistence** — Runs as a Fabric mod; interoperates with any Java mod
 - ⚡ **Native performance** — Project Panama FFI, minimal overhead
 - 🔒 **Panic isolation** — Rust mod crashes never take down the server
-- 📦 **Cross-platform** — `.ferrum` packages contain native artifacts per OS/arch
+- 📦 **Cross-platform** — `.morrow` packages contain native artifacts per OS/arch
 
 ## Quick Start
 
@@ -30,11 +30,11 @@ Ferrum is a **native runtime platform** that lets you write Minecraft mods in Ru
 ### Write a mod
 
 ```rust
-use ferrum::prelude::*;
+use morrow::prelude::*;
 
-#[ferrum::mod_main]
-fn init(_ctx: &mut Context) -> Result<(), FerrumError> {
-    ferrum::info!("Hello from Rust!");
+#[morrow::mod_main]
+fn init(_ctx: &mut Context) -> Result<(), MorrowError> {
+    morrow::info!("Hello from Rust!");
     Ok(())
 }
 ```
@@ -48,29 +48,29 @@ make build
 # Package the example mod
 make package-hello
 
-# Run Minecraft with Ferrum
+# Run Minecraft with Morrow
 cd bridge-java && ./gradlew runServer
 ```
 
 ## Architecture
 
 ```
-Minecraft (Java) → Fabric Host Adapter → Panama FFI → Ferrum Runtime (Rust)
-                                                          ├── Mod A (.ferrum)
-                                                          ├── Mod B (.ferrum)
-                                                          └── Mod C (.ferrum)
+Minecraft (Java) → Fabric Host Adapter → Panama FFI → Morrow Runtime (Rust)
+                                                          ├── Mod A (.morrow)
+                                                          ├── Mod B (.morrow)
+                                                          └── Mod C (.morrow)
 ```
 
 ## Project Structure
 
 ```
-ferrum/
-├── runtime-rs/          # Ferrum Runtime Core (Rust cdylib)
-├── sdk-rs/              # Ferrum SDK for mod developers
-│   └── ferrum-macros/   # Proc macros (#[ferrum::mod_main])
+morrow/
+├── runtime-rs/          # Morrow Runtime Core (Rust cdylib)
+├── sdk-rs/              # Morrow SDK for mod developers
+│   └── morrow-macros/   # Proc macros (#[morrow::mod_main])
 ├── bridge-java/         # Fabric Host Adapter (Java + Panama + Gradle)
 ├── examples/
-│   └── hello-ferrum/    # The simplest possible mod
+│   └── hello-morrow/    # The simplest possible mod
 ├── scripts/             # Build & packaging utilities
 └── docs/                # Design documents
 ```
@@ -109,7 +109,7 @@ cargo test
 cd bridge-java; ./gradlew runServer
 
 # Package example mod
-bash scripts/package-mod.sh examples/hello-ferrum  # Git Bash / WSL
+bash scripts/package-mod.sh examples/hello-morrow  # Git Bash / WSL
 # or manually create a ZIP with manifest + DLL
 ```
 

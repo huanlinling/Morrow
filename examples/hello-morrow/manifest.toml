@@ -1,7 +1,7 @@
 [package]
-name = "chat-bot"
+name = "hello-morrow"
 version = "0.1.0"
-description = "A chat bot that responds to messages"
+description = "The simplest possible Morrow mod"
 authors = ["Morrow Contributors"]
 license = "MIT"
 

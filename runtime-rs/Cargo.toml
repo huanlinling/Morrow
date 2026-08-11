@@ -1,8 +1,8 @@
 [package]
-name = "ferrum-runtime"
+name = "morrow-runtime"
 version = "0.1.0"
 edition = "2021"
-description = "Ferrum Runtime Core — Rust cdylib for Minecraft native modding"
+description = "Morrow Runtime Core — Rust cdylib for Minecraft native modding"
 
 [lib]
 crate-type = ["cdylib"]

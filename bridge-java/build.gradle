@@ -65,7 +65,7 @@ loom {
         server {
             server()
             // Tell NativeLibraryLoader where to find the .so
-            vmArg "-Dferrum.native.dir=${nativeLibDir.absolutePath}"
+            vmArg "-Dmorrow.native.dir=${nativeLibDir.absolutePath}"
             vmArg '--enable-preview'
             vmArg '--enable-native-access=ALL-UNNAMED'
         }

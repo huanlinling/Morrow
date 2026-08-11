@@ -9,7 +9,7 @@ Capability 系统解决一个核心问题：**Mod 需要 Runtime 提供的能力
 - 不表达 "不存在"，调用者不知道某个功能是否可用
 - 难以演化 — 新增能力时所有 mod 都需要重新编译
 
-Ferrum 的 Capability 系统：
+Morrow 的 Capability 系统：
 
 ```rust
 // Mod 显式声明需要什么

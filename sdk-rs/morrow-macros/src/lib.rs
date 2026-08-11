@@ -1,26 +1,26 @@
-//! Proc macros for the Ferrum modding SDK.
+//! Proc macros for the Morrow modding SDK.
 //!
-//! `#[ferrum::mod_main]` — marks a function as the mod entry point.
+//! `#[morrow::mod_main]` — marks a function as the mod entry point.
 
 use proc_macro::TokenStream;
 use quote::quote;
 
-/// Marks a function as the entry point for a Ferrum mod.
+/// Marks a function as the entry point for a Morrow mod.
 ///
 /// The function must have signature:
-/// `fn(&mut Context, *const RuntimeApi) -> Result<(), FerrumError>`
+/// `fn(&mut Context, *const RuntimeApi) -> Result<(), MorrowError>`
 ///
-/// The macro generates `ferrum_mod_init(api: *const RuntimeApi) -> u32`
+/// The macro generates `morrow_mod_init(api: *const RuntimeApi) -> u32`
 /// which the runtime calls with a pointer to its function table.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use ferrum::prelude::*;
+/// use morrow::prelude::*;
 ///
-/// #[ferrum::mod_main]
-/// fn init(ctx: &mut Context, api: *const RuntimeApi) -> Result<(), FerrumError> {
-///     ferrum::info!("Hello from my mod!");
+/// #[morrow::mod_main]
+/// fn init(ctx: &mut Context, api: *const RuntimeApi) -> Result<(), MorrowError> {
+///     morrow::info!("Hello from my mod!");
 ///     Ok(())
 /// }
 /// ```
@@ -36,14 +36,14 @@ pub fn mod_main(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #original
 
         #[unsafe(no_mangle)]
-        #vis extern "C" fn ferrum_mod_init(
-            api: *const ::ferrum::RuntimeApi
+        #vis extern "C" fn morrow_mod_init(
+            api: *const ::morrow::RuntimeApi
         ) -> u32 {
-            let mut ctx = ::ferrum::Context::new();
+            let mut ctx = ::morrow::Context::new();
             match #fn_name(&mut ctx, api) {
                 Ok(()) => 0,
                 Err(e) => {
-                    ::ferrum::error!("Init failed: {:?}", e);
+                    ::morrow::error!("Init failed: {:?}", e);
                     1
                 }
             }

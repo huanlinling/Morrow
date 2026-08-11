@@ -1,4 +1,4 @@
-package com.ferrum.host;
+package com.morrow.host;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -22,18 +22,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Fabric entry point for the Ferrum native runtime platform.
+ * Fabric entry point for the Morrow native runtime platform.
  *
  * <p>Loads the native Rust runtime library via Panama FFM, initializes it,
  * and registers lifecycle hooks so the runtime stays in sync with the
  * Minecraft server.
  *
  * <p>This is a single-point integration — all Rust-side logic is driven
- * through the opaque {@code runtimeHandle} returned by {@code ferrum_init}.
+ * through the opaque {@code runtimeHandle} returned by {@code morrow_init}.
  */
-public class FerrumMod implements ModInitializer {
+public class MorrowMod implements ModInitializer {
 
-    public static final Logger LOG = LoggerFactory.getLogger("Ferrum");
+    public static final Logger LOG = LoggerFactory.getLogger("Morrow");
 
     /** Must match {@code abi::ABI_VERSION} in runtime-rs/src/abi/mod.rs. */
     private static final int ABI_VERSION = 0x0001_0000;
@@ -45,7 +45,7 @@ public class FerrumMod implements ModInitializer {
 
     @Override
     public void onInitialize() {
-        LOG.info("Ferrum Host starting...");
+        LOG.info("Morrow Host starting...");
 
         // 1. Discover and load the native runtime
         Path nativeLib;
@@ -53,7 +53,7 @@ public class FerrumMod implements ModInitializer {
             nativeLib = NativeLibraryLoader.load();
         } catch (UnsatisfiedLinkError e) {
             LOG.error("Failed to load native runtime: {}", e.getMessage());
-            LOG.error("Ferrum will not be available. Build the runtime: cargo build --release");
+            LOG.error("Morrow will not be available. Build the runtime: cargo build --release");
             return;
         }
 
@@ -71,17 +71,17 @@ public class FerrumMod implements ModInitializer {
         // 3. Initialize the Rust runtime
         long runtimeHandle;
         try {
-            MethodHandle init = bridge.downcall("ferrum_init",
+            MethodHandle init = bridge.downcall("morrow_init",
                     FunctionDescriptor.of(ValueLayout.JAVA_LONG,
                             ValueLayout.JAVA_INT));
             runtimeHandle = (long) init.invokeExact(ABI_VERSION);
         } catch (Throwable e) {
-            LOG.error("Failed to call ferrum_init: {}", e.getMessage(), e);
+            LOG.error("Failed to call morrow_init: {}", e.getMessage(), e);
             return;
         }
 
         if (runtimeHandle == 0) {
-            LOG.error("ferrum_init returned 0 — ABI version mismatch? (requested {:#010x})",
+            LOG.error("morrow_init returned 0 — ABI version mismatch? (requested {:#010x})",
                     ABI_VERSION);
             return;
         }
@@ -89,25 +89,25 @@ public class FerrumMod implements ModInitializer {
         LOG.info("Runtime initialized (ABI v{}.{}, handle={})",
                 ABI_VERSION >> 16, ABI_VERSION & 0xFFFF, runtimeHandle);
 
-        // 4. Bind ferrum_load_mod
+        // 4. Bind morrow_load_mod
         MethodHandle loadMod;
         try {
-            loadMod = bridge.downcall("ferrum_load_mod",
+            loadMod = bridge.downcall("morrow_load_mod",
                     FunctionDescriptor.of(ValueLayout.JAVA_INT,
                             ValueLayout.JAVA_LONG,   // runtime_handle
                             ValueLayout.ADDRESS,     // path_ptr
                             ValueLayout.JAVA_INT));  // path_len
         } catch (Throwable e) {
-            LOG.error("Failed to bind ferrum_load_mod: {}", e.getMessage(), e);
+            LOG.error("Failed to bind morrow_load_mod: {}", e.getMessage(), e);
             return;
         }
 
-        // 5. Scan for and load .ferrum packages
+        // 5. Scan for and load .morrow packages
         Path modsDir = Path.of("mods");
         if (Files.isDirectory(modsDir)) {
             try (Stream<Path> files = Files.list(modsDir)) {
-                files.filter(p -> p.toString().endsWith(".ferrum"))
-                     .forEach(pkg -> loadFerrumPackage(bridge, loadMod, runtimeHandle, pkg));
+                files.filter(p -> p.toString().endsWith(".morrow"))
+                     .forEach(pkg -> loadMorrowPackage(bridge, loadMod, runtimeHandle, pkg));
             } catch (Exception e) {
                 LOG.warn("Failed to scan mods directory: {}", e.getMessage());
             }
@@ -115,40 +115,40 @@ public class FerrumMod implements ModInitializer {
             LOG.info("No mods/ directory found — skipping mod discovery.");
         }
 
-        // 6. Bind ferrum_tick
-        MethodHandle ferrumTick;
+        // 6. Bind morrow_tick
+        MethodHandle morrowTick;
         try {
-            ferrumTick = bridge.downcall("ferrum_tick",
+            morrowTick = bridge.downcall("morrow_tick",
                     FunctionDescriptor.ofVoid(
                             ValueLayout.JAVA_LONG,   // runtime_handle
                             ValueLayout.JAVA_LONG)); // tick_number
         } catch (Throwable e) {
-            LOG.error("Failed to bind ferrum_tick: {}", e.getMessage(), e);
+            LOG.error("Failed to bind morrow_tick: {}", e.getMessage(), e);
             return;
         }
 
-        // 7. Register Fabric tick hook → calls ferrum_tick each tick
-        final MethodHandle tickHandle = ferrumTick;
+        // 7. Register Fabric tick hook → calls morrow_tick each tick
+        final MethodHandle tickHandle = morrowTick;
         final long rtHandle = runtimeHandle;
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             try {
                 tickHandle.invokeExact(rtHandle, (long) server.getTicks());
             } catch (Throwable e) {
-                LOG.error("ferrum_tick failed: {}", e.getMessage());
+                LOG.error("morrow_tick failed: {}", e.getMessage());
             }
         });
 
         // 8. Bind lifecycle dispatch functions
         try {
-            MethodHandle dispatchStart = bridge.downcall("ferrum_dispatch_server_start",
+            MethodHandle dispatchStart = bridge.downcall("morrow_dispatch_server_start",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG));
-            MethodHandle dispatchStop = bridge.downcall("ferrum_dispatch_server_stop",
+            MethodHandle dispatchStop = bridge.downcall("morrow_dispatch_server_stop",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG));
 
             ServerLifecycleEvents.SERVER_STARTED.register(server -> {
                 currentServer = server;
                 registerHostApi(bridge, rtHandle);
-                registerFerrumCommands(rtHandle, bridge);
+                registerMorrowCommands(rtHandle, bridge);
                 registerEventListeners(rtHandle, bridge);
                 try { dispatchStart.invokeExact(rtHandle); }
                 catch (Throwable e) { LOG.error("server_start dispatch: {}", e.getMessage()); }
@@ -163,13 +163,13 @@ public class FerrumMod implements ModInitializer {
             LOG.warn("Lifecycle dispatch unavailable: {}", e.getMessage());
         }
 
-        LOG.info("Ferrum ready. {} mod(s) loaded. Tick dispatch active.",
-                ferrumModCount(bridge, runtimeHandle));
+        LOG.info("Morrow ready. {} mod(s) loaded. Tick dispatch active.",
+                morrowModCount(bridge, runtimeHandle));
     }
 
     // ─── Helpers ─────────────────────────────────
 
-    private static void loadFerrumPackage(PanamaBridge bridge, MethodHandle loadMod,
+    private static void loadMorrowPackage(PanamaBridge bridge, MethodHandle loadMod,
                                            long runtimeHandle, Path pkg) {
         LOG.info("Loading mod: {}", pkg.getFileName());
         try {
@@ -195,9 +195,9 @@ public class FerrumMod implements ModInitializer {
         }
     }
 
-    private static long ferrumModCount(PanamaBridge bridge, long runtimeHandle) {
+    private static long morrowModCount(PanamaBridge bridge, long runtimeHandle) {
         try {
-            MethodHandle count = bridge.downcall("ferrum_mod_count",
+            MethodHandle count = bridge.downcall("morrow_mod_count",
                     FunctionDescriptor.of(ValueLayout.JAVA_LONG));
             return (long) count.invokeExact();
         } catch (Throwable e) {
@@ -225,7 +225,7 @@ public class FerrumMod implements ModInitializer {
         byte[] bytes = MemorySegment.ofAddress(msgPtr).reinterpret(msgLen).toArray(ValueLayout.JAVA_BYTE);
         String msg = new String(bytes, StandardCharsets.UTF_8);
         currentServer.getPlayerManager().broadcast(
-                net.minecraft.text.Text.literal("[Ferrum] " + msg), false);
+                net.minecraft.text.Text.literal("[Morrow] " + msg), false);
     }
 
     private static int getPlayerList(long bufPtr, int bufCap) {
@@ -254,27 +254,27 @@ public class FerrumMod implements ModInitializer {
             Linker linker = Linker.nativeLinker();
 
             var pcStub = linker.upcallStub(
-                    MethodHandles.lookup().findStatic(FerrumMod.class, "getPlayerCount",
+                    MethodHandles.lookup().findStatic(MorrowMod.class, "getPlayerCount",
                             MethodType.methodType(int.class)),
                     FunctionDescriptor.of(ValueLayout.JAVA_INT), Arena.global());
 
             var smStub = linker.upcallStub(
-                    MethodHandles.lookup().findStatic(FerrumMod.class, "sendMessage",
+                    MethodHandles.lookup().findStatic(MorrowMod.class, "sendMessage",
                             MethodType.methodType(void.class, long.class, int.class)),
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global());
 
             var plStub = linker.upcallStub(
-                    MethodHandles.lookup().findStatic(FerrumMod.class, "getPlayerList",
+                    MethodHandles.lookup().findStatic(MorrowMod.class, "getPlayerList",
                             MethodType.methodType(int.class, long.class, int.class)),
                     FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global());
 
             var ecStub = linker.upcallStub(
-                    MethodHandles.lookup().findStatic(FerrumMod.class, "executeCommand",
+                    MethodHandles.lookup().findStatic(MorrowMod.class, "executeCommand",
                             MethodType.methodType(void.class, long.class, int.class)),
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global());
 
             var wtStub = linker.upcallStub(
-                    MethodHandles.lookup().findStatic(FerrumMod.class, "getWorldTime",
+                    MethodHandles.lookup().findStatic(MorrowMod.class, "getWorldTime",
                             MethodType.methodType(long.class)),
                     FunctionDescriptor.of(ValueLayout.JAVA_LONG), Arena.global());
 
@@ -286,7 +286,7 @@ public class FerrumMod implements ModInitializer {
             vtable.set(ValueLayout.ADDRESS, 24, ecStub);
             vtable.set(ValueLayout.ADDRESS, 32, wtStub);
 
-            MethodHandle registerApi = bridge.downcall("ferrum_register_host_api",
+            MethodHandle registerApi = bridge.downcall("morrow_register_host_api",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
             registerApi.invokeExact(runtimeHandle, vtable);
 
@@ -298,22 +298,22 @@ public class FerrumMod implements ModInitializer {
 
     // ─── Command dispatch ───────────────────────
 
-    private static void registerFerrumCommands(long runtimeHandle, PanamaBridge bridge) {
+    private static void registerMorrowCommands(long runtimeHandle, PanamaBridge bridge) {
         try {
-            MethodHandle dispatchCmd = bridge.downcall("ferrum_dispatch_command",
+            MethodHandle dispatchCmd = bridge.downcall("morrow_dispatch_command",
                     FunctionDescriptor.of(ValueLayout.JAVA_INT,
                             ValueLayout.JAVA_LONG,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
 
-            // Register /ferrum command that forwards to Rust
+            // Register /morrow command that forwards to Rust
             net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback.EVENT.register(
                 (dispatcher, registryAccess, environment) -> {
                     dispatcher.register(
                         net.minecraft.server.command.CommandManager
-                            .literal("ferrum")
+                            .literal("morrow")
                             .executes(ctx -> {
-                                forwardCommand(dispatchCmd, runtimeHandle, "ferrum", "");
+                                forwardCommand(dispatchCmd, runtimeHandle, "morrow", "");
                                 return 1;
                             })
                             .then(net.minecraft.server.command.CommandManager
@@ -322,7 +322,7 @@ public class FerrumMod implements ModInitializer {
                                         var msg = net.minecraft.command.argument.MessageArgumentType
                                                 .getMessage(ctx, "args");
                                         String args = msg.getString();
-                                        forwardCommand(dispatchCmd, runtimeHandle, "ferrum", args);
+                                        forwardCommand(dispatchCmd, runtimeHandle, "morrow", args);
                                         return 1;
                                     }))
                     );
@@ -354,13 +354,13 @@ public class FerrumMod implements ModInitializer {
 
     private static void registerEventListeners(long runtimeHandle, PanamaBridge bridge) {
         try {
-            MethodHandle playerJoin = bridge.downcall("ferrum_dispatch_player_join",
+            MethodHandle playerJoin = bridge.downcall("morrow_dispatch_player_join",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-            MethodHandle playerLeave = bridge.downcall("ferrum_dispatch_player_leave",
+            MethodHandle playerLeave = bridge.downcall("morrow_dispatch_player_leave",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-            MethodHandle chatMsg = bridge.downcall("ferrum_dispatch_chat_message",
+            MethodHandle chatMsg = bridge.downcall("morrow_dispatch_chat_message",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
@@ -383,15 +383,15 @@ public class FerrumMod implements ModInitializer {
                 });
 
             // Block break / place
-            MethodHandle blockBreak = bridge.downcall("ferrum_dispatch_block_break",
+            MethodHandle blockBreak = bridge.downcall("morrow_dispatch_block_break",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-            MethodHandle blockPlace = bridge.downcall("ferrum_dispatch_block_place",
+            MethodHandle blockPlace = bridge.downcall("morrow_dispatch_block_place",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-            MethodHandle playerDeath = bridge.downcall("ferrum_dispatch_player_death",
+            MethodHandle playerDeath = bridge.downcall("morrow_dispatch_player_death",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT));

@@ -1,4 +1,4 @@
-package com.ferrum.host;
+package com.morrow.host;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
@@ -7,7 +7,7 @@ import java.nio.file.Path;
 
 /**
  * Panama FFM bridge — manages the native linker, symbol lookup,
- * and downcall MethodHandles for calling into libferrum_runtime.
+ * and downcall MethodHandles for calling into libmorrow_runtime.
  *
  * <p>Usage:
  * <pre>{@code
@@ -54,7 +54,7 @@ public class PanamaBridge {
             throw new IllegalArgumentException("Native library not found: " + libPath);
         }
 
-        System.out.println("[Ferrum] Loading: " + libPath);
+        System.out.println("[Morrow] Loading: " + libPath);
 
         Linker linker = Linker.nativeLinker();
         SymbolLookup lookup = SymbolLookup.libraryLookup(libPath, Arena.global());
@@ -65,7 +65,7 @@ public class PanamaBridge {
     /**
      * Look up a symbol and create a downcall MethodHandle.
      *
-     * @param name exported symbol name (e.g. "add", "ferrum_init")
+     * @param name exported symbol name (e.g. "add", "morrow_init")
      * @param desc function descriptor matching the C signature
      * @return MethodHandle ready for invokeExact
      * @throws UnsatisfiedLinkError if the symbol is not found
@@ -75,7 +75,7 @@ public class PanamaBridge {
                 .orElseThrow(() -> new UnsatisfiedLinkError(
                         "Symbol '" + name + "' not found in " + libraryPath));
 
-        System.out.println("[Ferrum] Found symbol: " + name);
+        System.out.println("[Morrow] Found symbol: " + name);
         return linker.downcallHandle(symbol, desc);
     }
 
@@ -83,16 +83,16 @@ public class PanamaBridge {
      * Find the native library by searching common locations relative to
      * the current working directory.
      *
-     * <p>Typical layout (Cargo workspace): {@code target/release/libferrum_runtime.so}.
+     * <p>Typical layout (Cargo workspace): {@code target/release/libmorrow_runtime.so}.
      *
      * @return absolute path to the native library
      * @throws IllegalStateException if the library cannot be found
      */
     public static Path findNativeLibrary() {
         String[] candidates = {
-                "../../target/release/libferrum_runtime.so",
-                "../target/release/libferrum_runtime.so",
-                "target/release/libferrum_runtime.so",
+                "../../target/release/libmorrow_runtime.so",
+                "../target/release/libmorrow_runtime.so",
+                "target/release/libmorrow_runtime.so",
         };
 
         Path cwd = Path.of("").toAbsolutePath();
@@ -105,7 +105,7 @@ public class PanamaBridge {
         }
 
         throw new IllegalStateException(
-                "Cannot find libferrum_runtime.so. "
+                "Cannot find libmorrow_runtime.so. "
                 + "Build it first: cd runtime-rs && cargo build --release");
     }
 
