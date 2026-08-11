@@ -3,19 +3,8 @@
     "id": "morrow",
     "version": "${version}",
     "name": "Morrow",
-    "description": "Native Minecraft Mod Loader — Rust runtime + .morrow mods via Panama FFI",
-    "authors": ["Morrow Contributors"],
+    "description": "Native mod loader — Rust runtime via Panama FFI",
     "license": "MIT",
     "environment": "*",
-    "mixins": [
-        "morrow.mixins.json"
-    ],
-    "depends": {
-        "java": ">=21"
-    },
-    "custom": {
-        "morrow": {
-            "abi_version": 65536
-        }
-    }
+    "mixins": ["morrow.mixins.json"]
 }

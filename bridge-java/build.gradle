@@ -2,52 +2,31 @@ plugins {
     id 'fabric-loom' version "${fabric_loom_version}"
 }
 
+repositories {
+    mavenCentral()
+}
+
 group = project.maven_group
 version = project.mod_version
-
-base {
-    archivesName = project.archives_base_name
-}
+base { archivesName = project.archives_base_name }
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
 }
 
-// ─── Dependencies ────────────────────────────
-
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-    // No Fabric API — Morrow uses Mixin hooks directly
-    // modImplementation "net.fabricmc.fabric-api:..."
+    // Fabric Loader — only for Loom runServer in dev
+    // Production: java -javaagent:morrow.jar (Agent premain bootstraps Mixin)
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 }
 
-// ─── Native Library (Rust runtime) ─────────────
-
-// Path to the compiled native runtime (relative to bridge-java/)
 def nativeLibDir = file("${rootDir}/../target/release")
 
-// Copy the native library into run directories so NativeLibraryLoader can find it
-task copyNativeLib(type: Copy) {
-    from nativeLibDir
-    include '*.so', '*.dll', '*.dylib'
-    into file("${buildDir}/natives")
-}
-
-// Ensure native lib is built before running
 tasks.processResources {
-    dependsOn ':copyNativeLib'
-
-    // Expand ${version} in fabric.mod.json
-    inputs.property 'version', project.version
-    filesMatching('fabric.mod.json') {
-        expand project.properties
-    }
-
-    // Copy .so into the JAR for production packaging
     from(nativeLibDir) {
         include '*.so'
         into 'natives/linux-x86_64'
@@ -58,13 +37,22 @@ tasks.processResources {
     }
 }
 
-// ─── Run configurations ────────────────────────
+// Agent JAR (thin — deps on classpath via Loom in dev)
+tasks.jar {
+    manifest {
+        attributes(
+            'Premain-Class': 'com.morrow.agent.MorrowAgent',
+            'Agent-Class': 'com.morrow.agent.MorrowAgent',
+            'Can-Redefine-Classes': 'true',
+            'Can-Retransform-Classes': 'true'
+        )
+    }
+}
 
 loom {
     runs {
         server {
             server()
-            // Tell NativeLibraryLoader where to find the .so
             vmArg "-Dmorrow.native.dir=${nativeLibDir.absolutePath}"
             vmArg '--enable-preview'
             vmArg '--enable-native-access=ALL-UNNAMED'
@@ -72,15 +60,12 @@ loom {
     }
 }
 
-// Our source layout already matches Gradle conventions
 sourceSets {
     main {
         java.srcDirs = ['src/main/java']
         resources.srcDirs = ['src/main/resources']
     }
 }
-
-// ─── Tasks ─────────────────────────────────────
 
 tasks.withType(JavaCompile).configureEach {
     options.compilerArgs += ['--enable-preview']

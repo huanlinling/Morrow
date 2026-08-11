@@ -78,11 +78,11 @@ public class MorrowMod {
             } catch (Exception e) { LOG.warn("mod scan: {}", e.getMessage()); }
         }
 
-        // 5. Tick handler
+        // 5. Batch dispatch (replaces individual tick/event calls)
         try {
-            morrowTick = bridge.downcall("morrow_tick",
-                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
-        } catch (Throwable e) { LOG.error("tick: {}", e.getMessage()); }
+            dispatchBatch = bridge.downcall("morrow_dispatch_batch",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+        } catch (Throwable e) { LOG.error("batch: {}", e.getMessage()); }
 
         // 6. Dispatch server start
         try {
@@ -98,12 +98,25 @@ public class MorrowMod {
         LOG.info("Morrow ready. {} mod(s).", modCount());
     }
 
+    private static MethodHandle dispatchBatch;
+    private static final EventBuffer eventBuffer = new EventBuffer();
+
     // ─── Tick (called from Mixin) ─────────────────
 
+    /** Buffer a tick event, flush at end of tick. */
     public static void onTick(long tick) {
-        if (morrowTick == null) return;
-        try { morrowTick.invokeExact(runtimeHandle, tick); }
-        catch (Throwable e) { /* ignore */ }
+        eventBuffer.tick(tick);
+    }
+
+    /** Flush accumulated events to Rust in one FFM call. */
+    public static void flushBatch() {
+        if (dispatchBatch == null || eventBuffer.isEmpty()) return;
+        try {
+            var buf = eventBuffer.finish();
+            var seg = Arena.global().allocate(buf.remaining());
+            seg.copyFrom(MemorySegment.ofBuffer(buf));
+            dispatchBatch.invokeExact(runtimeHandle, seg, buf.remaining());
+        } catch (Throwable e) { LOG.error("batch: {}", e.getMessage()); }
     }
 
     // ─── Shutdown (called from Mixin) ────────────

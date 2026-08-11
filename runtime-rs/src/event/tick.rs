@@ -11,7 +11,7 @@ pub type TickCallback = unsafe extern "C" fn(u64);
 
 /// Registry of tick callbacks, keyed by mod name.
 pub struct TickRegistry {
-    callbacks: HashMap<String, TickCallback>,
+    pub(crate) callbacks: HashMap<String, TickCallback>,
 }
 
 impl TickRegistry {

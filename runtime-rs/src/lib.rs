@@ -266,7 +266,7 @@ pub extern "C" fn morrow_tick(runtime_handle: u64, tick_number: u64) {
 // Per-runtime registries (mods + tick callbacks)
 // ---------------------------------------------------------------------------
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use event::tick::TickRegistry;
 
@@ -554,6 +554,111 @@ pub extern "C" fn morrow_get_mod_config(
             }
         }
         0
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Batch event dispatch (1 FFM call/tick)
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn morrow_dispatch_batch(
+    runtime_handle: u64,
+    data_ptr: *const u8,
+    data_len: u32,
+) {
+    panic::ffi_boundary((), || {
+        let data = unsafe { std::slice::from_raw_parts(data_ptr, data_len as usize) };
+        if data.len() < 4 { return; }
+
+        let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let mut pos: usize = 4;
+
+        let quarantined: HashSet<String> = QUARANTINES
+            .lock().unwrap().get(&runtime_handle)
+            .map(|q| q.quarantined.lock().unwrap().clone())
+            .unwrap_or_default();
+
+        let tick_reg = TICK_REGISTRIES.lock().unwrap();
+        let tick_cbs = tick_reg.get(&runtime_handle);
+        let event_cbs = EVENT_CALLBACKS.lock().unwrap();
+        let cbs = event_cbs.get(&runtime_handle);
+        let lifecycle = LIFECYCLE_REGISTRIES.lock().unwrap();
+        let life = lifecycle.get(&runtime_handle);
+
+        for _ in 0..count {
+            if pos + 6 > data.len() { break; }
+            let etype = u16::from_le_bytes([data[pos], data[pos+1]]) as usize;
+            let f1_len = u16::from_le_bytes([data[pos+2], data[pos+3]]) as usize;
+            let f2_len = u16::from_le_bytes([data[pos+4], data[pos+5]]) as usize;
+            pos += 6;
+
+            match etype {
+                0 => { // tick
+                    if pos + 8 <= data.len() {
+                        let tick = u64::from_le_bytes(data[pos..pos+8].try_into().unwrap());
+                        pos += 8;
+                        if let Some(reg) = tick_cbs {
+                            for (name, cb) in &reg.callbacks {
+                                if quarantined.contains(name) { continue; }
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(tick); }));
+                            }
+                        }
+                    }
+                }
+                1 | 2 => { // join / leave
+                    if pos + f1_len <= data.len() {
+                        pos += f1_len;
+                        if let Some(cbs) = cbs {
+                            let map = if etype == 1 { &cbs.player_join } else { &cbs.player_leave };
+                            for (name, cb) in map {
+                                if quarantined.contains(name) { continue; }
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(data[pos-f1_len..pos].as_ptr(), f1_len as u32); }));
+                            }
+                        }
+                    }
+                }
+                3 => { // chat
+                    if pos + f1_len + f2_len <= data.len() {
+                        let p_ptr = data[pos..pos+f1_len].as_ptr();
+                        let m_ptr = data[pos+f1_len..pos+f1_len+f2_len].as_ptr();
+                        pos += f1_len + f2_len;
+                        if let Some(cbs) = cbs {
+                            for (name, cb) in &cbs.chat_message {
+                                if quarantined.contains(name) { continue; }
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(p_ptr, f1_len as u32, m_ptr, f2_len as u32); }));
+                            }
+                        }
+                    }
+                }
+                4 | 5 => { // block break/place
+                    if pos + f1_len + f2_len <= data.len() {
+                        let p_ptr = data[pos..pos+f1_len].as_ptr();
+                        let b_ptr = data[pos+f1_len..pos+f1_len+f2_len].as_ptr();
+                        pos += f1_len + f2_len;
+                        if let Some(cbs) = cbs {
+                            let map = if etype == 4 { &cbs.block_break } else { &cbs.block_place };
+                            for (name, cb) in map {
+                                if quarantined.contains(name) { continue; }
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(p_ptr, f1_len as u32, b_ptr, f2_len as u32); }));
+                            }
+                        }
+                    }
+                }
+                6 => { // player death
+                    if pos + f1_len <= data.len() {
+                        pos += f1_len;
+                        if let Some(cbs) = cbs {
+                            for (name, cb) in &cbs.player_death {
+                                if quarantined.contains(name) { continue; }
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(data[pos-f1_len..pos].as_ptr(), f1_len as u32, std::ptr::null(), 0u32); }));
+                            }
+                        }
+                    }
+                }
+                _ => { pos += f1_len + f2_len; } // skip unknown
+            }
+        }
     })
 }
 
