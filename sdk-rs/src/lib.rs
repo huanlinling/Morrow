@@ -1,20 +1,50 @@
-//! Ferrum SDK — Write Minecraft mods in Rust.
+//! # Ferrum SDK
 //!
-//! # Quick Start
+//! Write Minecraft mods in Rust. Ferrum compiles your code to a native
+//! library, loaded by the Fabric host adapter via Panama FFI.
+//!
+//! ## Quick Start
 //!
 //! ```ignore
 //! use ferrum::prelude::*;
 //!
 //! #[ferrum::mod_main]
-//! fn init(ctx: &mut Context) -> Result<(), FerrumError> {
-//!     ferrum::info!("Hello from my mod!");
+//! fn init(ctx: &mut Context, api: *const RuntimeApi) -> Result<(), FerrumError> {
+//!     ferrum::info!("Hello from Rust!");
 //!     Ok(())
 //! }
 //! ```
 //!
-//! The `#[ferrum::mod_main]` macro generates the `extern "C"` entry points
-//! the Ferrum runtime expects. During `ferrum_mod_init`, the runtime calls
-//! your init function with a [`Context`] for capability access.
+//! ## RuntimeApi
+//!
+//! The [`RuntimeApi`] vtable provides access to game state:
+//!
+//! | Function | Returns | Description |
+//! |----------|---------|-------------|
+//! | `get_player_count(handle)` | i32 | Online player count |
+//! | `get_player_list(handle, buf, cap)` | u32 | Comma-separated player names |
+//! | `send_message(handle, ptr, len)` | — | Broadcast to chat |
+//! | `execute_command(handle, ptr, len)` | — | Run server command |
+//! | `get_world_time(handle)` | i64 | World time in ticks |
+//! | `register_command(handle, name, len, cb)` | — | Register `/` command |
+//! | `get_config(handle, name, len, buf, cap)` | u32 | Read config.toml |
+//! | `request_capability(handle, cap, len)` | u32 | Check feature availability |
+//!
+//! ## Optional Exports
+//!
+//! Export any of these functions to receive events:
+//!
+//! | Export | Signature | Called when |
+//! |--------|-----------|-------------|
+//! | `ferrum_mod_tick` | `fn(u64)` | Every game tick (20 TPS) |
+//! | `ferrum_mod_server_start` | `fn()` | Server finished starting |
+//! | `ferrum_mod_server_stop` | `fn()` | Server begins stopping |
+//! | `ferrum_mod_player_join` | `fn(*const u8, u32)` | Player joins |
+//! | `ferrum_mod_player_leave` | `fn(*const u8, u32)` | Player leaves |
+//! | `ferrum_mod_chat_message` | `fn(*const u8, u32, *const u8, u32)` | Chat message sent |
+//! | `ferrum_mod_block_break` | `fn(*const u8, u32, *const u8, u32)` | Block broken |
+//! | `ferrum_mod_block_place` | `fn(*const u8, u32, *const u8, u32)` | Block placed |
+//! | `ferrum_mod_player_death` | `fn(*const u8, u32, *const u8, u32)` | Player dies |
 
 pub mod context;
 pub mod error;
@@ -37,11 +67,9 @@ pub mod prelude {
     pub use crate::{info, warn, error};
 }
 
-// ---------------------------------------------------------------------------
-// Logging macros — output to stderr, captured by Minecraft log
-// ---------------------------------------------------------------------------
+// ─── Logging macros ────────────────────────────
 
-/// Log an info-level message to the Minecraft server log.
+/// Log an info-level message. Format: `[mod-name] msg`.
 #[macro_export]
 macro_rules! info {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {
@@ -49,7 +77,7 @@ macro_rules! info {
     };
 }
 
-/// Log a warning to the Minecraft server log.
+/// Log a warning.
 #[macro_export]
 macro_rules! warn {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {
@@ -57,7 +85,7 @@ macro_rules! warn {
     };
 }
 
-/// Log an error to the Minecraft server log.
+/// Log an error.
 #[macro_export]
 macro_rules! error {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {

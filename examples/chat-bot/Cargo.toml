@@ -1,0 +1,11 @@
+[package]
+name = "chat-bot"
+version = "0.1.0"
+edition = "2021"
+description = "Ferrum chat bot example — responds to messages"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ferrum = { path = "../../sdk-rs" }

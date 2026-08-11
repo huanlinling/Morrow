@@ -87,14 +87,30 @@ ferrum/
 | M5: SDK Macros | ✅ Done |
 | M6: Linux Verification | ✅ Done |
 | M7: Benchmark Suite | ✅ Done |
+| M8: Windows Support | 🔨 In Progress |
 
 ## Development
+
+### Linux & macOS
 
 ```bash
 make build          # Build Rust runtime
 make test           # Run Rust unit tests
 make test-bridge    # Run Panama bridge tests (M0 + M1)
 make package-hello  # Package the example mod
+cd bridge-java && ./gradlew runServer  # Run test server
+```
+
+### Windows
+
+```powershell
+cargo build --release
+cargo test
+cd bridge-java; ./gradlew runServer
+
+# Package example mod
+bash scripts/package-mod.sh examples/hello-ferrum  # Git Bash / WSL
+# or manually create a ZIP with manifest + DLL
 ```
 
 ## License

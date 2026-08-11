@@ -5,4 +5,5 @@ members = [
     "sdk-rs",
     "sdk-rs/ferrum-macros",
     "examples/hello-ferrum",
+    "examples/chat-bot",
 ]
