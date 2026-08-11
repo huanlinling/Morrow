@@ -93,6 +93,9 @@ pub struct ModExports {
     pub tick_callback: Option<unsafe extern "C" fn(u64)>,
     pub server_start_callback: Option<unsafe extern "C" fn()>,
     pub server_stop_callback: Option<unsafe extern "C" fn()>,
+    pub player_join_callback: Option<unsafe extern "C" fn(*const u8, u32)>,
+    pub player_leave_callback: Option<unsafe extern "C" fn(*const u8, u32)>,
+    pub chat_message_callback: Option<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>,
 }
 
 /// Returns the mod name and discovered optional exports on success.
@@ -159,6 +162,18 @@ pub fn load_package(
         library.get::<unsafe extern "C" fn()>(b"ferrum_mod_server_stop")
             .ok().map(|sym| *sym.into_raw())
     };
+    let player_join_callback = unsafe {
+        library.get::<unsafe extern "C" fn(*const u8, u32)>(b"ferrum_mod_player_join")
+            .ok().map(|sym| *sym.into_raw())
+    };
+    let player_leave_callback = unsafe {
+        library.get::<unsafe extern "C" fn(*const u8, u32)>(b"ferrum_mod_player_leave")
+            .ok().map(|sym| *sym.into_raw())
+    };
+    let chat_message_callback = unsafe {
+        library.get::<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>(b"ferrum_mod_chat_message")
+            .ok().map(|sym| *sym.into_raw())
+    };
 
     if tick_callback.is_some() {
         eprintln!("[Ferrum]   Optional: ferrum_mod_tick");
@@ -175,6 +190,9 @@ pub fn load_package(
         tick_callback,
         server_start_callback,
         server_stop_callback,
+        player_join_callback,
+        player_leave_callback,
+        chat_message_callback,
     };
     let name = manifest.package.name.clone();
     registry.insert(

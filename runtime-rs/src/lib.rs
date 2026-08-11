@@ -176,6 +176,22 @@ pub extern "C" fn ferrum_load_mod(
                             }
                         }
 
+                        // Register event callbacks
+                        if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get_mut(&handle.as_u64()) {
+                            if let Some(cb) = exports.player_join_callback {
+                                cbs.player_join.insert(name.clone(), cb);
+                                eprintln!("[Ferrum]   Registered player_join for '{name}'");
+                            }
+                            if let Some(cb) = exports.player_leave_callback {
+                                cbs.player_leave.insert(name.clone(), cb);
+                                eprintln!("[Ferrum]   Registered player_leave for '{name}'");
+                            }
+                            if let Some(cb) = exports.chat_message_callback {
+                                cbs.chat_message.insert(name.clone(), cb);
+                                eprintln!("[Ferrum]   Registered chat_message for '{name}'");
+                            }
+                        }
+
                         eprintln!("[Ferrum] Mod '{name}' loaded successfully");
                         abi::RESULT_OK
                     }
@@ -236,6 +252,12 @@ static ERROR_CHANNELS: LazyLock<Mutex<HashMap<u64, error::ErrorChannel>>> =
 static HOST_APIS: LazyLock<Mutex<HashMap<u64, host_api::HostApi>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+static COMMAND_REGISTRIES: LazyLock<Mutex<HashMap<u64, host_api::CommandRegistry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+static EVENT_CALLBACKS: LazyLock<Mutex<HashMap<u64, host_api::ModEventCallbacks>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Per-runtime lifecycle callbacks.
 pub struct LifecycleRegistry {
     pub server_start: HashMap<String, unsafe extern "C" fn()>,
@@ -251,6 +273,12 @@ fn register_mod_registry(handle: u64) {
     });
     ERROR_CHANNELS.lock().unwrap().insert(handle, error::ErrorChannel::new());
     HOST_APIS.lock().unwrap().insert(handle, host_api::HostApi::new());
+    COMMAND_REGISTRIES.lock().unwrap().insert(handle, host_api::CommandRegistry::new());
+    EVENT_CALLBACKS.lock().unwrap().insert(handle, host_api::ModEventCallbacks {
+        player_join: HashMap::new(),
+        player_leave: HashMap::new(),
+        chat_message: HashMap::new(),
+    });
 }
 
 fn remove_mod_registry(handle: u64) -> Option<ModRegistry> {
@@ -313,6 +341,147 @@ pub extern "C" fn ferrum_handle_count() -> u64 {
 pub extern "C" fn ferrum_mod_count() -> u64 {
     panic::ffi_boundary(0, || {
         MOD_REGISTRIES.lock().unwrap().values().map(|r| r.len()).sum::<usize>() as u64
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Host API: send_message
+// ---------------------------------------------------------------------------
+
+/// Send a chat message via Java upcall.
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_send_message(
+    runtime_handle: u64,
+    msg_ptr: *const u8,
+    msg_len: u32,
+) {
+    panic::ffi_boundary((), || {
+        let msg = unsafe {
+            let bytes = std::slice::from_raw_parts(msg_ptr, msg_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("<invalid utf8>")
+        };
+        let apis = HOST_APIS.lock().unwrap();
+        let api = if runtime_handle == 0 {
+            apis.values().next()
+        } else {
+            apis.get(&runtime_handle)
+        };
+        if let Some(api) = api {
+            api.send_message(msg);
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Command system
+// ---------------------------------------------------------------------------
+
+/// Register a command (called by mods during init via RuntimeApi).
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_register_command(
+    runtime_handle: u64,
+    name_ptr: *const u8,
+    name_len: u32,
+    callback: host_api::CommandCallback,
+) {
+    panic::ffi_boundary((), || {
+        let name = unsafe {
+            let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("<invalid>")
+        };
+        let registries = COMMAND_REGISTRIES.lock().unwrap();
+        let reg = if runtime_handle == 0 {
+            registries.values().next()
+        } else {
+            registries.get(&runtime_handle)
+        };
+        if let Some(reg) = reg {
+            reg.register(name, callback);
+            eprintln!("[Ferrum] Command registered: /{name}");
+        }
+    })
+}
+
+/// Dispatch a command from Java to registered Rust callbacks.
+/// Returns 1 if handled, 0 if no handler found.
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_dispatch_command(
+    runtime_handle: u64,
+    name_ptr: *const u8,
+    name_len: u32,
+    args_ptr: *const u8,
+    args_len: u32,
+) -> u32 {
+    panic::ffi_boundary(0, || {
+        let name = unsafe {
+            let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("")
+        };
+        let args = unsafe {
+            let bytes = std::slice::from_raw_parts(args_ptr, args_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("")
+        };
+        if let Some(reg) = COMMAND_REGISTRIES.lock().unwrap().get(&runtime_handle) {
+            if reg.dispatch(name, args) { 1 } else { 0 }
+        } else {
+            0
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Event dispatch: PlayerJoin, PlayerLeave, Chat
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_dispatch_player_join(
+    runtime_handle: u64,
+    name_ptr: *const u8,
+    name_len: u32,
+) {
+    panic::ffi_boundary((), || {
+        if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
+            for (mod_name, cb) in &cbs.player_join {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                    cb(name_ptr, name_len);
+                }));
+            }
+        }
+    })
+}
+
+// Same pattern for player_leave and chat_message...
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_dispatch_player_leave(
+    runtime_handle: u64,
+    name_ptr: *const u8,
+    name_len: u32,
+) {
+    panic::ffi_boundary((), || {
+        if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
+            for (_mod_name, cb) in &cbs.player_leave {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                    cb(name_ptr, name_len);
+                }));
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_dispatch_chat_message(
+    runtime_handle: u64,
+    player_ptr: *const u8, player_len: u32,
+    msg_ptr: *const u8, msg_len: u32,
+) {
+    panic::ffi_boundary((), || {
+        if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
+            for (_mod_name, cb) in &cbs.chat_message {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                    cb(player_ptr, player_len, msg_ptr, msg_len);
+                }));
+            }
+        }
     })
 }
 

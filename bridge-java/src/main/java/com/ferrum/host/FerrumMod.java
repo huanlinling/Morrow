@@ -147,8 +147,9 @@ public class FerrumMod implements ModInitializer {
 
             ServerLifecycleEvents.SERVER_STARTED.register(server -> {
                 currentServer = server;
-                // Register host API (upcalls) now that the server is live
                 registerHostApi(bridge, rtHandle);
+                registerFerrumCommands(rtHandle, bridge);
+                registerEventListeners(rtHandle, bridge);
                 try { dispatchStart.invokeExact(rtHandle); }
                 catch (Throwable e) { LOG.error("server_start dispatch: {}", e.getMessage()); }
             });
@@ -206,39 +207,160 @@ public class FerrumMod implements ModInitializer {
 
     // ─── Host API (Upcalls: Rust → Java) ────────
 
-    /** Called by the Rust runtime via upcall to get the online player count. */
     private static int getPlayerCount() {
         if (currentServer == null) return 0;
         return currentServer.getPlayerManager().getPlayerList().size();
+    }
+
+    private static void sendMessage(long msgPtr, int msgLen) {
+        if (currentServer == null) return;
+        byte[] bytes = MemorySegment.ofAddress(msgPtr).reinterpret(msgLen).toArray(ValueLayout.JAVA_BYTE);
+        String msg = new String(bytes, StandardCharsets.UTF_8);
+        currentServer.getPlayerManager().broadcast(
+                net.minecraft.text.Text.literal("[Ferrum] " + msg), false);
     }
 
     private static void registerHostApi(PanamaBridge bridge, long runtimeHandle) {
         try {
             Linker linker = Linker.nativeLinker();
 
-            // Create upcall stub: () -> int (getPlayerCount)
-            MethodHandle playerCountHandle = MethodHandles.lookup()
-                    .findStatic(FerrumMod.class, "getPlayerCount",
-                            MethodType.methodType(int.class));
-            MemorySegment playerCountStub = linker.upcallStub(
-                    playerCountHandle,
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT),
-                    Arena.global());
+            // Upcall: get_player_count
+            var pcHandle = MethodHandles.lookup().findStatic(FerrumMod.class,
+                    "getPlayerCount", MethodType.methodType(int.class));
+            var pcStub = linker.upcallStub(pcHandle,
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT), Arena.global());
 
-            // Build the vtable struct in off-heap memory
-            MemorySegment vtable = Arena.global().allocate(8); // one pointer
-            vtable.set(ValueLayout.ADDRESS, 0, playerCountStub);
+            // Upcall: send_message(ptr, len)
+            var smHandle = MethodHandles.lookup().findStatic(FerrumMod.class,
+                    "sendMessage", MethodType.methodType(void.class, long.class, int.class));
+            var smStub = linker.upcallStub(smHandle,
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global());
 
-            // Pass to Rust
+            // Build vtable: [0]=getPlayerCount, [8]=sendMessage
+            MemorySegment vtable = Arena.global().allocate(16);
+            vtable.set(ValueLayout.ADDRESS, 0, pcStub);
+            vtable.set(ValueLayout.ADDRESS, 8, smStub);
+
             MethodHandle registerApi = bridge.downcall("ferrum_register_host_api",
-                    FunctionDescriptor.ofVoid(
-                            ValueLayout.JAVA_LONG,   // runtime_handle
-                            ValueLayout.ADDRESS));   // vtable_ptr
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
             registerApi.invokeExact(runtimeHandle, vtable);
 
-            LOG.info("Host API registered (upcalls active).");
+            LOG.info("Host API registered (upcalls: get_player_count, send_message).");
         } catch (Throwable e) {
             LOG.error("Failed to register host API: {}", e.getMessage(), e);
         }
+    }
+
+    // ─── Command dispatch ───────────────────────
+
+    private static void registerFerrumCommands(long runtimeHandle, PanamaBridge bridge) {
+        try {
+            MethodHandle dispatchCmd = bridge.downcall("ferrum_dispatch_command",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+
+            // Register /ferrum command that forwards to Rust
+            net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback.EVENT.register(
+                (dispatcher, registryAccess, environment) -> {
+                    dispatcher.register(
+                        net.minecraft.server.command.CommandManager
+                            .literal("ferrum")
+                            .executes(ctx -> {
+                                forwardCommand(dispatchCmd, runtimeHandle, "ferrum", "");
+                                return 1;
+                            })
+                            .then(net.minecraft.server.command.CommandManager
+                                    .argument("args", net.minecraft.command.argument.MessageArgumentType.message())
+                                    .executes(ctx -> {
+                                        var msg = net.minecraft.command.argument.MessageArgumentType
+                                                .getMessage(ctx, "args");
+                                        String args = msg.getString();
+                                        forwardCommand(dispatchCmd, runtimeHandle, "ferrum", args);
+                                        return 1;
+                                    }))
+                    );
+                });
+        } catch (Throwable e) {
+            LOG.error("Failed to register commands: {}", e.getMessage());
+        }
+    }
+
+    private static void forwardCommand(MethodHandle dispatch, long handle,
+                                        String name, String args) {
+        try {
+            byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
+            byte[] argsBytes = args.getBytes(StandardCharsets.UTF_8);
+            var nameSeg = Arena.global().allocate(nameBytes.length);
+            nameSeg.copyFrom(MemorySegment.ofArray(nameBytes));
+            var argsSeg = Arena.global().allocate(argsBytes.length);
+            argsSeg.copyFrom(MemorySegment.ofArray(argsBytes));
+
+            int _result = (int) dispatch.invokeExact(handle,
+                    nameSeg, nameBytes.length,
+                    argsSeg, argsBytes.length);
+        } catch (Throwable e) {
+            LOG.error("Command dispatch failed: {}", e.getMessage());
+        }
+    }
+
+    // ─── Player event listeners ─────────────────
+
+    private static void registerEventListeners(long runtimeHandle, PanamaBridge bridge) {
+        try {
+            MethodHandle playerJoin = bridge.downcall("ferrum_dispatch_player_join",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+            MethodHandle playerLeave = bridge.downcall("ferrum_dispatch_player_leave",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+            MethodHandle chatMsg = bridge.downcall("ferrum_dispatch_chat_message",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+
+            net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents.JOIN.register(
+                (handler, sender, server) -> {
+                    String name = handler.getPlayer().getName().getString();
+                    ffiCallVoidStr(playerJoin, runtimeHandle, name);
+                });
+            net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents.DISCONNECT.register(
+                (handler, server) -> {
+                    String name = handler.getPlayer().getName().getString();
+                    ffiCallVoidStr(playerLeave, runtimeHandle, name);
+                });
+            net.fabricmc.fabric.api.message.v1.ServerMessageEvents.CHAT_MESSAGE.register(
+                (message, sender, params) -> {
+                    String player = sender.getName().getString();
+                    String msg = message.getContent().getString();
+                    ffiCallChat(chatMsg, runtimeHandle, player, msg);
+                });
+
+            LOG.info("Player events registered (join/leave/chat).");
+        } catch (Throwable e) {
+            LOG.error("Failed to register events: {}", e.getMessage());
+        }
+    }
+
+    private static void ffiCallVoidStr(MethodHandle handle, long rt, String s) {
+        try {
+            byte[] b = s.getBytes(StandardCharsets.UTF_8);
+            var seg = Arena.global().allocate(b.length);
+            seg.copyFrom(MemorySegment.ofArray(b));
+            handle.invokeExact(rt, seg, b.length);
+        } catch (Throwable e) { LOG.error("FFI event: {}", e.getMessage()); }
+    }
+
+    private static void ffiCallChat(MethodHandle handle, long rt, String player, String msg) {
+        try {
+            byte[] pb = player.getBytes(StandardCharsets.UTF_8);
+            byte[] mb = msg.getBytes(StandardCharsets.UTF_8);
+            var ps = Arena.global().allocate(pb.length);
+            ps.copyFrom(MemorySegment.ofArray(pb));
+            var ms = Arena.global().allocate(mb.length);
+            ms.copyFrom(MemorySegment.ofArray(mb));
+            handle.invokeExact(rt, ps, pb.length, ms, mb.length);
+        } catch (Throwable e) { LOG.error("FFI chat: {}", e.getMessage()); }
     }
 }

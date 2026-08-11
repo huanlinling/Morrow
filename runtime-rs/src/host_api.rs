@@ -1,19 +1,10 @@
-//! Host API — function pointers provided by the Java host.
+//! Host API — function pointers from Java + RuntimeApi for mods.
 //!
-//! During initialization, Java creates Panama upcall stubs and passes
-//! them to Rust via a vtable struct. Rust mods call these to query
-//! game state (player count, world info, etc.).
-//!
-//! ## Memory layout
-//!
-//! The vtable is a packed struct allocated by Java:
-//!
-//! ```text
-//! offset 0: get_player_count() -> i32  (8 bytes = function pointer)
-//! ```
-//!
-//! Future fields are appended at higher offsets.
+//! Two-way bridge:
+//! - **HostVtable**: Java→Rust upcall stubs (get_player_count, send_message)
+//! - **RuntimeApi**: Rust→mod function table (passed to ferrum_mod_init)
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
@@ -21,22 +12,23 @@ use std::sync::Mutex;
 // ---------------------------------------------------------------------------
 
 /// Function table passed to `ferrum_mod_init(api: *const RuntimeApi)`.
-///
-/// Mods use this to call back into the runtime for host API queries
-/// without needing to see runtime symbols (which aren't exported with
-/// `RTLD_GLOBAL`).
 #[repr(C)]
 pub struct RuntimeApi {
-    /// Query the online player count via Java upcall.
-    /// Pass `runtime_handle = 0` for the first available runtime.
     pub get_player_count: unsafe extern "C" fn(runtime_handle: u64) -> i32,
+    pub send_message: unsafe extern "C" fn(runtime_handle: u64, msg_ptr: *const u8, msg_len: u32),
+    pub register_command: unsafe extern "C" fn(
+        runtime_handle: u64,
+        name_ptr: *const u8, name_len: u32,
+        callback: unsafe extern "C" fn(*const u8, u32),
+    ),
 }
 
 impl RuntimeApi {
-    /// Create a RuntimeApi pointing to the current runtime's exports.
     pub fn new() -> Self {
         RuntimeApi {
             get_player_count: crate::ferrum_get_player_count,
+            send_message: crate::ferrum_send_message,
+            register_command: crate::ferrum_register_command,
         }
     }
 }
@@ -45,58 +37,93 @@ impl RuntimeApi {
 // Host Vtable (from Java)
 // ---------------------------------------------------------------------------
 
-/// Function pointer type: returns the current online player count.
 type GetPlayerCountFn = unsafe extern "C" fn() -> i32;
+type SendMessageFn = unsafe extern "C" fn(*const u8, u32);
 
-/// Vtable passed from Java during init.
-///
-/// Safety: all function pointers must be valid upcall stubs
-/// created by the Panama Linker. They live as long as the Arena
-/// they were allocated in (the runtime's lifetime).
 #[repr(C)]
 pub struct HostVtable {
     pub get_player_count: Option<GetPlayerCountFn>,
+    pub send_message: Option<SendMessageFn>,
 }
 
-/// Thread-safe holder for the host vtable.
 pub struct HostApi {
     vtable: Mutex<Option<HostVtable>>,
 }
 
 impl HostApi {
     pub fn new() -> Self {
-        HostApi {
-            vtable: Mutex::new(None),
-        }
+        HostApi { vtable: Mutex::new(None) }
     }
 
-    /// Store the vtable pointer from Java.
     pub fn set_vtable(&self, ptr: *const HostVtable) {
-        unsafe {
-            let vtable = ptr.read();
-            *self.vtable.lock().unwrap() = Some(vtable);
-        }
+        unsafe { *self.vtable.lock().unwrap() = Some(ptr.read()); }
     }
 
-    /// Call into Java to get the current online player count.
-    ///
-    /// Returns `None` if the vtable hasn't been registered yet
-    /// or the upcall fails.
     pub fn get_player_count(&self) -> Option<i32> {
         let guard = self.vtable.lock().unwrap();
-        let vtable = guard.as_ref()?;
-        let func = vtable.get_player_count?;
+        let func = guard.as_ref()?.get_player_count?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() }));
+        result.ok()
+    }
 
+    pub fn send_message(&self, msg: &str) -> bool {
+        let guard = self.vtable.lock().unwrap();
+        let Some(vtable) = guard.as_ref() else { return false };
+        let Some(func) = vtable.send_message else { return false };
+        let bytes = msg.as_bytes();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            func()
+            func(bytes.as_ptr(), bytes.len() as u32)
         }));
+        result.is_ok()
+    }
+}
 
-        match result {
-            Ok(count) => Some(count),
-            Err(_) => {
-                eprintln!("[Ferrum] Host API: get_player_count upcall panicked");
-                None
-            }
+// ---------------------------------------------------------------------------
+// Command registry
+// ---------------------------------------------------------------------------
+
+pub type CommandCallback = unsafe extern "C" fn(args_ptr: *const u8, args_len: u32);
+
+pub struct CommandRegistry {
+    commands: Mutex<HashMap<String, CommandCallback>>,
+}
+
+impl CommandRegistry {
+    pub fn new() -> Self {
+        CommandRegistry { commands: Mutex::new(HashMap::new()) }
+    }
+
+    pub fn register(&self, name: &str, callback: CommandCallback) {
+        self.commands.lock().unwrap().insert(name.to_string(), callback);
+    }
+
+    pub fn dispatch(&self, name: &str, args: &str) -> bool {
+        let guard = self.commands.lock().unwrap();
+        if let Some(cb) = guard.get(name) {
+            let args_bytes = args.as_bytes();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                cb(args_bytes.as_ptr(), args_bytes.len() as u32);
+            }));
+            true
+        } else {
+            false
         }
     }
+}
+
+impl Default for CommandRegistry {
+    fn default() -> Self { Self::new() }
+}
+
+// ---------------------------------------------------------------------------
+// Per-mod callbacks (for events)
+// ---------------------------------------------------------------------------
+
+pub type PlayerEventCallback = unsafe extern "C" fn(*const u8, u32);
+pub type ChatEventCallback = unsafe extern "C" fn(*const u8, u32, *const u8, u32);
+
+pub struct ModEventCallbacks {
+    pub player_join: HashMap<String, PlayerEventCallback>,
+    pub player_leave: HashMap<String, PlayerEventCallback>,
+    pub chat_message: HashMap<String, ChatEventCallback>,
 }
