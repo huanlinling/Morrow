@@ -190,6 +190,18 @@ pub extern "C" fn ferrum_load_mod(
                                 cbs.chat_message.insert(name.clone(), cb);
                                 eprintln!("[Ferrum]   Registered chat_message for '{name}'");
                             }
+                            if let Some(cb) = exports.block_break_callback {
+                                cbs.block_break.insert(name.clone(), cb);
+                                eprintln!("[Ferrum]   Registered block_break for '{name}'");
+                            }
+                            if let Some(cb) = exports.block_place_callback {
+                                cbs.block_place.insert(name.clone(), cb);
+                                eprintln!("[Ferrum]   Registered block_place for '{name}'");
+                            }
+                            if let Some(cb) = exports.player_death_callback {
+                                cbs.player_death.insert(name.clone(), cb);
+                                eprintln!("[Ferrum]   Registered player_death for '{name}'");
+                            }
                         }
 
                         eprintln!("[Ferrum] Mod '{name}' loaded successfully");
@@ -278,6 +290,9 @@ fn register_mod_registry(handle: u64) {
         player_join: HashMap::new(),
         player_leave: HashMap::new(),
         chat_message: HashMap::new(),
+        block_break: HashMap::new(),
+        block_place: HashMap::new(),
+        player_death: HashMap::new(),
     });
 }
 
@@ -373,6 +388,52 @@ pub extern "C" fn ferrum_send_message(
 }
 
 // ---------------------------------------------------------------------------
+// Host API: get_player_list, execute_command, get_world_time
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_get_player_list(
+    runtime_handle: u64,
+    buf: *mut u8,
+    buf_cap: u32,
+) -> u32 {
+    panic::ffi_boundary(0, || {
+        let buffer = unsafe { std::slice::from_raw_parts_mut(buf, buf_cap as usize) };
+        let apis = HOST_APIS.lock().unwrap();
+        let api = if runtime_handle == 0 { apis.values().next() } else { apis.get(&runtime_handle) };
+        api.and_then(|a| a.get_player_list(buffer)).unwrap_or(0) as u32
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_execute_command(
+    runtime_handle: u64,
+    cmd_ptr: *const u8,
+    cmd_len: u32,
+) {
+    panic::ffi_boundary((), || {
+        let cmd = unsafe {
+            let bytes = std::slice::from_raw_parts(cmd_ptr, cmd_len as usize);
+            std::str::from_utf8(bytes).unwrap_or("")
+        };
+        let apis = HOST_APIS.lock().unwrap();
+        let api = if runtime_handle == 0 { apis.values().next() } else { apis.get(&runtime_handle) };
+        if let Some(api) = api {
+            api.execute_command(cmd);
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_get_world_time(runtime_handle: u64) -> i64 {
+    panic::ffi_boundary(-1, || {
+        let apis = HOST_APIS.lock().unwrap();
+        let api = if runtime_handle == 0 { apis.values().next() } else { apis.get(&runtime_handle) };
+        api.and_then(|a| a.get_world_time()).unwrap_or(-1)
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Command system
 // ---------------------------------------------------------------------------
 
@@ -428,6 +489,35 @@ pub extern "C" fn ferrum_dispatch_command(
         }
     })
 }
+
+// ---------------------------------------------------------------------------
+// Event dispatch: BlockBreak, BlockPlace, PlayerDeath
+// ---------------------------------------------------------------------------
+
+macro_rules! dispatch_two_str_event {
+    ($name:ident, $field:ident) => {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $name(
+            runtime_handle: u64,
+            s1_ptr: *const u8, s1_len: u32,
+            s2_ptr: *const u8, s2_len: u32,
+        ) {
+            panic::ffi_boundary((), || {
+                if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
+                    for (_mod_name, cb) in &cbs.$field {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                            cb(s1_ptr, s1_len, s2_ptr, s2_len);
+                        }));
+                    }
+                }
+            })
+        }
+    };
+}
+
+dispatch_two_str_event!(ferrum_dispatch_block_break, block_break);
+dispatch_two_str_event!(ferrum_dispatch_block_place, block_place);
+dispatch_two_str_event!(ferrum_dispatch_player_death, player_death);
 
 // ---------------------------------------------------------------------------
 // Event dispatch: PlayerJoin, PlayerLeave, Chat

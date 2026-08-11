@@ -1,8 +1,4 @@
-//! Host API — function pointers from Java + RuntimeApi for mods.
-//!
-//! Two-way bridge:
-//! - **HostVtable**: Java→Rust upcall stubs (get_player_count, send_message)
-//! - **RuntimeApi**: Rust→mod function table (passed to ferrum_mod_init)
+//! Host API — two-way bridge between Rust mods and Java game server.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -11,7 +7,6 @@ use std::sync::Mutex;
 // Runtime API — passed to mods during init
 // ---------------------------------------------------------------------------
 
-/// Function table passed to `ferrum_mod_init(api: *const RuntimeApi)`.
 #[repr(C)]
 pub struct RuntimeApi {
     pub get_player_count: unsafe extern "C" fn(runtime_handle: u64) -> i32,
@@ -21,6 +16,9 @@ pub struct RuntimeApi {
         name_ptr: *const u8, name_len: u32,
         callback: unsafe extern "C" fn(*const u8, u32),
     ),
+    pub get_player_list: unsafe extern "C" fn(runtime_handle: u64, buf: *mut u8, buf_cap: u32) -> u32,
+    pub execute_command: unsafe extern "C" fn(runtime_handle: u64, cmd_ptr: *const u8, cmd_len: u32),
+    pub get_world_time: unsafe extern "C" fn(runtime_handle: u64) -> i64,
 }
 
 impl RuntimeApi {
@@ -29,6 +27,9 @@ impl RuntimeApi {
             get_player_count: crate::ferrum_get_player_count,
             send_message: crate::ferrum_send_message,
             register_command: crate::ferrum_register_command,
+            get_player_list: crate::ferrum_get_player_list,
+            execute_command: crate::ferrum_execute_command,
+            get_world_time: crate::ferrum_get_world_time,
         }
     }
 }
@@ -39,11 +40,17 @@ impl RuntimeApi {
 
 type GetPlayerCountFn = unsafe extern "C" fn() -> i32;
 type SendMessageFn = unsafe extern "C" fn(*const u8, u32);
+type GetPlayerListFn = unsafe extern "C" fn(*mut u8, u32) -> u32;
+type ExecuteCommandFn = unsafe extern "C" fn(*const u8, u32);
+type GetWorldTimeFn = unsafe extern "C" fn() -> i64;
 
 #[repr(C)]
 pub struct HostVtable {
     pub get_player_count: Option<GetPlayerCountFn>,
     pub send_message: Option<SendMessageFn>,
+    pub get_player_list: Option<GetPlayerListFn>,
+    pub execute_command: Option<ExecuteCommandFn>,
+    pub get_world_time: Option<GetWorldTimeFn>,
 }
 
 pub struct HostApi {
@@ -51,9 +58,7 @@ pub struct HostApi {
 }
 
 impl HostApi {
-    pub fn new() -> Self {
-        HostApi { vtable: Mutex::new(None) }
-    }
+    pub fn new() -> Self { HostApi { vtable: Mutex::new(None) } }
 
     pub fn set_vtable(&self, ptr: *const HostVtable) {
         unsafe { *self.vtable.lock().unwrap() = Some(ptr.read()); }
@@ -62,8 +67,7 @@ impl HostApi {
     pub fn get_player_count(&self) -> Option<i32> {
         let guard = self.vtable.lock().unwrap();
         let func = guard.as_ref()?.get_player_count?;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() }));
-        result.ok()
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() })).ok()
     }
 
     pub fn send_message(&self, msg: &str) -> bool {
@@ -71,15 +75,39 @@ impl HostApi {
         let Some(vtable) = guard.as_ref() else { return false };
         let Some(func) = vtable.send_message else { return false };
         let bytes = msg.as_bytes();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             func(bytes.as_ptr(), bytes.len() as u32)
+        })).is_ok()
+    }
+
+    pub fn get_player_list(&self, buf: &mut [u8]) -> Option<usize> {
+        let guard = self.vtable.lock().unwrap();
+        let func = guard.as_ref()?.get_player_list?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            func(buf.as_mut_ptr(), buf.len() as u32) as usize
         }));
-        result.is_ok()
+        result.ok().map(|n| n.min(buf.len()))
+    }
+
+    pub fn execute_command(&self, cmd: &str) -> bool {
+        let guard = self.vtable.lock().unwrap();
+        let Some(vtable) = guard.as_ref() else { return false };
+        let Some(func) = vtable.execute_command else { return false };
+        let bytes = cmd.as_bytes();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            func(bytes.as_ptr(), bytes.len() as u32)
+        })).is_ok()
+    }
+
+    pub fn get_world_time(&self) -> Option<i64> {
+        let guard = self.vtable.lock().unwrap();
+        let func = guard.as_ref()?.get_world_time?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() })).ok()
     }
 }
 
 // ---------------------------------------------------------------------------
-// Command registry
+// Command / Event registries (unchanged)
 // ---------------------------------------------------------------------------
 
 pub type CommandCallback = unsafe extern "C" fn(args_ptr: *const u8, args_len: u32);
@@ -89,41 +117,30 @@ pub struct CommandRegistry {
 }
 
 impl CommandRegistry {
-    pub fn new() -> Self {
-        CommandRegistry { commands: Mutex::new(HashMap::new()) }
-    }
-
+    pub fn new() -> Self { CommandRegistry { commands: Mutex::new(HashMap::new()) } }
     pub fn register(&self, name: &str, callback: CommandCallback) {
         self.commands.lock().unwrap().insert(name.to_string(), callback);
     }
-
     pub fn dispatch(&self, name: &str, args: &str) -> bool {
         let guard = self.commands.lock().unwrap();
         if let Some(cb) = guard.get(name) {
-            let args_bytes = args.as_bytes();
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                cb(args_bytes.as_ptr(), args_bytes.len() as u32);
-            }));
+            let b = args.as_bytes();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(b.as_ptr(), b.len() as u32); }));
             true
-        } else {
-            false
-        }
+        } else { false }
     }
 }
 
-impl Default for CommandRegistry {
-    fn default() -> Self { Self::new() }
-}
-
-// ---------------------------------------------------------------------------
-// Per-mod callbacks (for events)
-// ---------------------------------------------------------------------------
+impl Default for CommandRegistry { fn default() -> Self { Self::new() } }
 
 pub type PlayerEventCallback = unsafe extern "C" fn(*const u8, u32);
-pub type ChatEventCallback = unsafe extern "C" fn(*const u8, u32, *const u8, u32);
+pub type TwoStrEventCallback = unsafe extern "C" fn(*const u8, u32, *const u8, u32);
 
 pub struct ModEventCallbacks {
     pub player_join: HashMap<String, PlayerEventCallback>,
     pub player_leave: HashMap<String, PlayerEventCallback>,
-    pub chat_message: HashMap<String, ChatEventCallback>,
+    pub chat_message: HashMap<String, TwoStrEventCallback>,
+    pub block_break: HashMap<String, TwoStrEventCallback>,
+    pub block_place: HashMap<String, TwoStrEventCallback>,
+    pub player_death: HashMap<String, TwoStrEventCallback>,
 }

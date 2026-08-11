@@ -1,37 +1,48 @@
-//! Hello Ferrum — demo mod showing the full API surface.
+//! Hello Ferrum — demo mod showing the full API.
 //!
-//! Features: init, lifecycle, tick, player events, commands, chat.
+//! Features: commands, player events, block events, world queries, chat.
 
 use ferrum::prelude::*;
 
 static mut API: Option<RuntimeApi> = None;
 
-/// Mod entry point — registers a command and stores the API.
 #[ferrum::mod_main]
 fn init(_ctx: &mut Context, api: *const RuntimeApi) -> Result<(), FerrumError> {
     ferrum::info!("Hello from Rust!");
-    let api_ref = unsafe { api.read() };
-    // Register a command
-    let api_ptr = api;
+    let a = unsafe { api.read() };
     unsafe {
         let name = b"ferrum";
-        (api_ref.register_command)(0, name.as_ptr(), name.len() as u32, ferrum_command_handler);
-        API = Some(api_ref);
+        (a.register_command)(0, name.as_ptr(), name.len() as u32, ferrum_cmd);
+        (a.register_command)(0, b"day".as_ptr(), 3, day_cmd);
+        API = Some(a);
     }
     Ok(())
 }
 
-// ─── Command handler ──────────────────────────
+// ─── Commands ──────────────────────────────────
 
-unsafe extern "C" fn ferrum_command_handler(args_ptr: *const u8, args_len: u32) {
+unsafe extern "C" fn ferrum_cmd(args_ptr: *const u8, args_len: u32) {
     let args = unsafe {
         let bytes = std::slice::from_raw_parts(args_ptr, args_len as usize);
         String::from_utf8_lossy(bytes)
     };
-    let msg = format!("Ferrum command executed! Args: {args}");
-    let msg_bytes = msg.as_bytes();
     if let Some(ref api) = unsafe { API.as_ref() } {
-        unsafe { (api.send_message)(0, msg_bytes.as_ptr(), msg_bytes.len() as u32); }
+        let mut buf = [0u8; 256];
+        let n = unsafe { (api.get_player_list)(0, buf.as_mut_ptr(), buf.len() as u32) };
+        let list = std::str::from_utf8(&buf[..n as usize]).unwrap_or("?");
+        let time = unsafe { (api.get_world_time)(0) };
+        let msg = format!("Players: {}. Time: {}. Args: {args}", list, time);
+        let b = msg.as_bytes();
+        unsafe { (api.send_message)(0, b.as_ptr(), b.len() as u32); }
+    }
+}
+
+unsafe extern "C" fn day_cmd(_: *const u8, _: u32) {
+    if let Some(ref api) = unsafe { API.as_ref() } {
+        let cmd = b"time set day";
+        unsafe { (api.execute_command)(0, cmd.as_ptr(), cmd.len() as u32); }
+        let msg = b"Time set to day!";
+        unsafe { (api.send_message)(0, msg.as_ptr(), msg.len() as u32); }
     }
 }
 
@@ -39,25 +50,20 @@ unsafe extern "C" fn ferrum_command_handler(args_ptr: *const u8, args_len: u32) 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ferrum_mod_server_start() {
-    ferrum::info!("Server started! Try /ferrum hello");
+    ferrum::info!("Ready! Try /ferrum or /day");
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ferrum_mod_server_stop() {
-    ferrum::info!("Server stopping...");
+    ferrum::info!("Goodbye!");
 }
 
 // ─── Tick ──────────────────────────────────────
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ferrum_mod_tick(tick: u64) {
-    if tick % 20 == 0 {
-        let players = unsafe {
-            API.as_ref().map(|api| (api.get_player_count)(0)).unwrap_or(-1)
-        };
-        if tick % 200 == 0 { // every 10 seconds
-            ferrum::info!("Tick {}: {} players online", tick, players);
-        }
+    if tick == 200 {
+        ferrum::info!("Server has been running for 10 seconds");
     }
 }
 
@@ -69,7 +75,7 @@ pub extern "C" fn ferrum_mod_player_join(name_ptr: *const u8, name_len: u32) {
         let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
         String::from_utf8_lossy(bytes)
     };
-    ferrum::info!("Player joined: {}", name);
+    ferrum::info!("+ {}", name);
 }
 
 #[unsafe(no_mangle)]
@@ -78,7 +84,7 @@ pub extern "C" fn ferrum_mod_player_leave(name_ptr: *const u8, name_len: u32) {
         let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
         String::from_utf8_lossy(bytes)
     };
-    ferrum::info!("Player left: {}", name);
+    ferrum::info!("- {}", name);
 }
 
 // ─── Chat ──────────────────────────────────────
@@ -96,11 +102,51 @@ pub extern "C" fn ferrum_mod_chat_message(
         let bytes = std::slice::from_raw_parts(msg_ptr, msg_len as usize);
         String::from_utf8_lossy(bytes)
     };
-    if msg.contains("ferrum") {
-        let reply = format!("{} mentioned ferrum!", player);
-        let bytes = reply.as_bytes();
-        if let Some(ref api) = unsafe { API.as_ref() } {
-            unsafe { (api.send_message)(0, bytes.as_ptr(), bytes.len() as u32); }
-        }
-    }
+    ferrum::info!("<{}> {}", player, msg);
+}
+
+// ─── Block events ──────────────────────────────
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_mod_block_break(
+    player_ptr: *const u8, player_len: u32,
+    block_ptr: *const u8, block_len: u32,
+) {
+    let player = unsafe {
+        let bytes = std::slice::from_raw_parts(player_ptr, player_len as usize);
+        String::from_utf8_lossy(bytes)
+    };
+    let block = unsafe {
+        let bytes = std::slice::from_raw_parts(block_ptr, block_len as usize);
+        String::from_utf8_lossy(bytes)
+    };
+    ferrum::info!("{} broke {}", player, block);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_mod_block_place(
+    player_ptr: *const u8, player_len: u32,
+    block_ptr: *const u8, block_len: u32,
+) {
+    let player = unsafe {
+        let bytes = std::slice::from_raw_parts(player_ptr, player_len as usize);
+        String::from_utf8_lossy(bytes)
+    };
+    let block = unsafe {
+        let bytes = std::slice::from_raw_parts(block_ptr, block_len as usize);
+        String::from_utf8_lossy(bytes)
+    };
+    ferrum::info!("{} placed {}", player, block);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_mod_player_death(
+    player_ptr: *const u8, player_len: u32,
+    msg_ptr: *const u8, msg_len: u32,
+) {
+    let player = unsafe {
+        let bytes = std::slice::from_raw_parts(player_ptr, player_len as usize);
+        String::from_utf8_lossy(bytes)
+    };
+    ferrum::info!("{} died", player);
 }

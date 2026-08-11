@@ -212,6 +212,14 @@ public class FerrumMod implements ModInitializer {
         return currentServer.getPlayerManager().getPlayerList().size();
     }
 
+    private static String joinPlayerNames() {
+        if (currentServer == null) return "";
+        var names = new java.util.ArrayList<String>();
+        currentServer.getPlayerManager().getPlayerList()
+                .forEach(p -> names.add(p.getName().getString()));
+        return String.join(",", names);
+    }
+
     private static void sendMessage(long msgPtr, int msgLen) {
         if (currentServer == null) return;
         byte[] bytes = MemorySegment.ofAddress(msgPtr).reinterpret(msgLen).toArray(ValueLayout.JAVA_BYTE);
@@ -220,32 +228,69 @@ public class FerrumMod implements ModInitializer {
                 net.minecraft.text.Text.literal("[Ferrum] " + msg), false);
     }
 
+    private static int getPlayerList(long bufPtr, int bufCap) {
+        String names = joinPlayerNames();
+        byte[] bytes = names.getBytes(StandardCharsets.UTF_8);
+        int len = Math.min(bytes.length, bufCap);
+        MemorySegment.ofAddress(bufPtr).reinterpret(len).copyFrom(MemorySegment.ofArray(bytes));
+        return len;
+    }
+
+    private static void executeCommand(long cmdPtr, int cmdLen) {
+        if (currentServer == null) return;
+        byte[] bytes = MemorySegment.ofAddress(cmdPtr).reinterpret(cmdLen).toArray(ValueLayout.JAVA_BYTE);
+        String cmd = new String(bytes, StandardCharsets.UTF_8);
+        currentServer.getCommandManager().executeWithPrefix(
+                currentServer.getCommandSource(), cmd);
+    }
+
+    private static long getWorldTime() {
+        if (currentServer == null) return -1;
+        return currentServer.getOverworld().getTimeOfDay();
+    }
+
     private static void registerHostApi(PanamaBridge bridge, long runtimeHandle) {
         try {
             Linker linker = Linker.nativeLinker();
 
-            // Upcall: get_player_count
-            var pcHandle = MethodHandles.lookup().findStatic(FerrumMod.class,
-                    "getPlayerCount", MethodType.methodType(int.class));
-            var pcStub = linker.upcallStub(pcHandle,
+            var pcStub = linker.upcallStub(
+                    MethodHandles.lookup().findStatic(FerrumMod.class, "getPlayerCount",
+                            MethodType.methodType(int.class)),
                     FunctionDescriptor.of(ValueLayout.JAVA_INT), Arena.global());
 
-            // Upcall: send_message(ptr, len)
-            var smHandle = MethodHandles.lookup().findStatic(FerrumMod.class,
-                    "sendMessage", MethodType.methodType(void.class, long.class, int.class));
-            var smStub = linker.upcallStub(smHandle,
+            var smStub = linker.upcallStub(
+                    MethodHandles.lookup().findStatic(FerrumMod.class, "sendMessage",
+                            MethodType.methodType(void.class, long.class, int.class)),
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global());
 
-            // Build vtable: [0]=getPlayerCount, [8]=sendMessage
-            MemorySegment vtable = Arena.global().allocate(16);
+            var plStub = linker.upcallStub(
+                    MethodHandles.lookup().findStatic(FerrumMod.class, "getPlayerList",
+                            MethodType.methodType(int.class, long.class, int.class)),
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global());
+
+            var ecStub = linker.upcallStub(
+                    MethodHandles.lookup().findStatic(FerrumMod.class, "executeCommand",
+                            MethodType.methodType(void.class, long.class, int.class)),
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global());
+
+            var wtStub = linker.upcallStub(
+                    MethodHandles.lookup().findStatic(FerrumMod.class, "getWorldTime",
+                            MethodType.methodType(long.class)),
+                    FunctionDescriptor.of(ValueLayout.JAVA_LONG), Arena.global());
+
+            // Vtable layout: [0]=pc, [8]=sm, [16]=pl, [24]=ec, [32]=wt
+            MemorySegment vtable = Arena.global().allocate(40);
             vtable.set(ValueLayout.ADDRESS, 0, pcStub);
             vtable.set(ValueLayout.ADDRESS, 8, smStub);
+            vtable.set(ValueLayout.ADDRESS, 16, plStub);
+            vtable.set(ValueLayout.ADDRESS, 24, ecStub);
+            vtable.set(ValueLayout.ADDRESS, 32, wtStub);
 
             MethodHandle registerApi = bridge.downcall("ferrum_register_host_api",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
             registerApi.invokeExact(runtimeHandle, vtable);
 
-            LOG.info("Host API registered (upcalls: get_player_count, send_message).");
+            LOG.info("Host API registered (5 upcalls).");
         } catch (Throwable e) {
             LOG.error("Failed to register host API: {}", e.getMessage(), e);
         }
@@ -337,10 +382,55 @@ public class FerrumMod implements ModInitializer {
                     ffiCallChat(chatMsg, runtimeHandle, player, msg);
                 });
 
-            LOG.info("Player events registered (join/leave/chat).");
+            // Block break / place
+            MethodHandle blockBreak = bridge.downcall("ferrum_dispatch_block_break",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+            MethodHandle blockPlace = bridge.downcall("ferrum_dispatch_block_place",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+            MethodHandle playerDeath = bridge.downcall("ferrum_dispatch_player_death",
+                    FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+
+            net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents.AFTER.register(
+                (world, player, pos, state, entity) -> {
+                    String pname = player.getName().getString();
+                    String bname = state.getBlock().getName().getString();
+                    ffiCallTwoStr(blockBreak, runtimeHandle, pname, bname);
+                });
+            // Block place: use ServerPlayerEvents or a simpler hook
+            net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents.ENTITY_LOAD.register(
+                (entity, world) -> { /* not the right hook — use block place callback */ });
+
+            net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents.AFTER_DEATH.register(
+                (entity, source) -> {
+                    if (entity instanceof net.minecraft.server.network.ServerPlayerEntity player) {
+                        String pname = player.getName().getString();
+                        String dmsg = source.getDeathMessage(player).getString();
+                        ffiCallTwoStr(playerDeath, runtimeHandle, pname, dmsg);
+                    }
+                });
+
+            LOG.info("Event listeners registered (join/leave/chat/block/death).");
         } catch (Throwable e) {
             LOG.error("Failed to register events: {}", e.getMessage());
         }
+    }
+
+    private static void ffiCallTwoStr(MethodHandle handle, long rt, String s1, String s2) {
+        try {
+            byte[] b1 = s1.getBytes(StandardCharsets.UTF_8);
+            byte[] b2 = s2.getBytes(StandardCharsets.UTF_8);
+            var seg1 = Arena.global().allocate(b1.length);
+            seg1.copyFrom(MemorySegment.ofArray(b1));
+            var seg2 = Arena.global().allocate(b2.length);
+            seg2.copyFrom(MemorySegment.ofArray(b2));
+            handle.invokeExact(rt, seg1, b1.length, seg2, b2.length);
+        } catch (Throwable e) { LOG.error("FFI: {}", e.getMessage()); }
     }
 
     private static void ffiCallVoidStr(MethodHandle handle, long rt, String s) {
