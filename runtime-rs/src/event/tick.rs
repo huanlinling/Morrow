@@ -34,10 +34,12 @@ impl TickRegistry {
 
     /// Fire all tick callbacks.
     ///
-    /// Each callback is called inside [`std::panic::catch_unwind`]
-    /// so a single mod's panic doesn't crash the server or prevent
-    /// other mods from receiving their tick.
-    pub fn dispatch(&self, tick: u64) {
+    /// Each callback is panic-isolated. Panicking mods are quarantined
+    /// and will not receive future callbacks.
+    ///
+    /// Returns the names of mods that panicked.
+    pub fn dispatch(&self, tick: u64) -> Vec<String> {
+        let mut panicked = Vec::new();
         for (name, callback) in &self.callbacks {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 unsafe { callback(tick) };
@@ -50,9 +52,10 @@ impl TickRegistry {
                     .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                     .unwrap_or("<non-string panic>");
                 eprintln!("[Ferrum] Mod '{name}' panicked during tick {tick}: {msg}");
-                // Mod continues to receive future ticks — we don't quarantine in M4
+                panicked.push(name.clone());
             }
         }
+        panicked
     }
 
     /// Number of registered tick callbacks.

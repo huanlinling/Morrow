@@ -244,7 +244,16 @@ pub extern "C" fn ferrum_tick(runtime_handle: u64, tick_number: u64) {
         };
 
         if let Some(registry) = TICK_REGISTRIES.lock().unwrap().get(&handle.as_u64()) {
-            registry.dispatch(tick_number);
+            let panicked = registry.dispatch(tick_number);
+            if !panicked.is_empty() {
+                // Quarantine panicking mods
+                if let Some(q) = QUARANTINES.lock().unwrap().get(&handle.as_u64()) {
+                    for name in &panicked {
+                        q.add(name);
+                        eprintln!("[Ferrum] Mod '{name}' quarantined after panic");
+                    }
+                }
+            }
         }
     })
 }
@@ -275,6 +284,9 @@ static HOST_APIS: LazyLock<Mutex<HashMap<u64, host_api::HostApi>>> =
 static COMMAND_REGISTRIES: LazyLock<Mutex<HashMap<u64, host_api::CommandRegistry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+static QUARANTINES: LazyLock<Mutex<HashMap<u64, host_api::Quarantine>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 static CONFIG_STORES: LazyLock<Mutex<HashMap<u64, host_api::ConfigStore>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -297,6 +309,7 @@ fn register_mod_registry(handle: u64) {
     ERROR_CHANNELS.lock().unwrap().insert(handle, error::ErrorChannel::new());
     HOST_APIS.lock().unwrap().insert(handle, host_api::HostApi::new());
     COMMAND_REGISTRIES.lock().unwrap().insert(handle, host_api::CommandRegistry::new());
+    QUARANTINES.lock().unwrap().insert(handle, host_api::Quarantine::new());
     CONFIG_STORES.lock().unwrap().insert(handle, host_api::ConfigStore::new());
     EVENT_CALLBACKS.lock().unwrap().insert(handle, host_api::ModEventCallbacks {
         player_join: HashMap::new(),
@@ -368,6 +381,14 @@ pub extern "C" fn ferrum_handle_count() -> u64 {
 pub extern "C" fn ferrum_mod_count() -> u64 {
     panic::ffi_boundary(0, || {
         MOD_REGISTRIES.lock().unwrap().values().map(|r| r.len()).sum::<usize>() as u64
+    })
+}
+
+/// Return the number of quarantined mods (panicked and isolated).
+#[unsafe(no_mangle)]
+pub extern "C" fn ferrum_quarantined_count() -> u64 {
+    panic::ffi_boundary(0, || {
+        QUARANTINES.lock().unwrap().values().map(|q| q.count()).sum::<usize>() as u64
     })
 }
 

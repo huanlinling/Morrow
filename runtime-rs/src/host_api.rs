@@ -1,6 +1,6 @@
 //! Host API — two-way bridge between Rust mods and Java game server.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
@@ -167,3 +167,20 @@ pub struct ModEventCallbacks {
     pub block_place: HashMap<String, TwoStrEventCallback>,
     pub player_death: HashMap<String, TwoStrEventCallback>,
 }
+
+// ---------------------------------------------------------------------------
+// Panic quarantine
+// ---------------------------------------------------------------------------
+
+pub struct Quarantine {
+    quarantined: Mutex<HashSet<String>>,
+}
+
+impl Quarantine {
+    pub fn new() -> Self { Quarantine { quarantined: Mutex::new(HashSet::new()) } }
+    pub fn add(&self, name: &str) { self.quarantined.lock().unwrap().insert(name.to_string()); }
+    pub fn is_quarantined(&self, name: &str) -> bool { self.quarantined.lock().unwrap().contains(name) }
+    pub fn count(&self) -> usize { self.quarantined.lock().unwrap().len() }
+}
+
+impl Default for Quarantine { fn default() -> Self { Self::new() } }
