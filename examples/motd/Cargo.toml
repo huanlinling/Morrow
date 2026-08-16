@@ -9,3 +9,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 morrow = { path = "../../sdk-rs" }
+serde = { version = "1", features = ["derive"] }

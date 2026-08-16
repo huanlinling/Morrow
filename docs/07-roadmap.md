@@ -214,14 +214,27 @@ fn init(ctx: &mut Context) -> Result<(), MorrowError> {
 |---|------|------|
 | 6.1 | Linux native build 完整流程 | ✅ |
 | 6.2 | Dedicated server 部署测试 | ✅ |
-| 6.3 | 长时间稳定性测试（1 小时） | 🔨 |
-| 6.4 | CI: Ubuntu build + test | 🔨 |
+| 6.3 | 长时间稳定性测试（1 小时） | ✅ |
+| 6.4 | CI: Ubuntu build + test | ✅ |
 | 6.5 | 修复平台特定问题 | ✅ |
 
 实现说明:Docker 三阶段构建(cargo → gradle → runtime 镜像)+ loom
 runServer 冒烟即为 6.1/6.2 的验证;6.5 在冒烟中暴露并修复了两个
 稳定性 bug(事件回调期 RuntimeApi 悬垂指针 → SIGSEGV;EventBuffer
-缺 reset → tick 事件丢失),见 v0.15。
+缺 reset → tick 事件丢失),见 v0.15。6.3 实测 55 分钟、tick 65000+、
+内存持平(2.244 GiB)。6.4 的 workflow 已就绪待推 GitHub。
+
+v0.16(架构优化,见 design.md 评审结论):
+- SDK 状态从 thread_local 升级为全局 static — mod 自 spawn 线程
+  也能调用 API;未初始化时显式 panic 而非静默 no-op
+- `config::<T: DeserializeOwned>` 类型化 TOML 解析 + `config_raw()`
+- runtime 命令注册冲突检测:同名命令拒绝注册(返回错误、不覆盖),
+  失败槽位自动归还
+- Java 事件缓冲直接写 native MemorySegment(per-tick confined
+  arena,design.md §5.1)— 消除 Java heap 往返与 Arena.global() 增长
+- 新增真实链路集成测试(testmod cdylib → .morrow 打包 → 加载 →
+  派发,不启动 Minecraft);首次运行即抓出命令派发死锁
+  (commands 锁跨回调持有,handler 内调 API 重入 data 锁)并修复
 
 ### 验收标准
 

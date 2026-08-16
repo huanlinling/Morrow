@@ -18,7 +18,7 @@ use morrow::prelude::*;
 
 #[morrow::mod_main]
 fn init(ctx: &mut Context) -> Result<(), MorrowError> {
-    ctx.register_command("ping", ping);
+    ctx.register_command("ping", ping)?; // Err(String) 经 ? 转 MorrowError
     Ok(())
 }
 
@@ -42,7 +42,8 @@ runtime 会 dlopen 该库并调用生成的 `morrow_mod_init`。
 宏生成 `extern "C" fn morrow_mod_init(*const RuntimeApi) -> u32`
 (返回 0=成功, 1=失败),并:
 
-1. 把 runtime API 存入 thread-local(供事件 handler 与日志宏使用)
+1. 把 runtime API vtable 存入 per-library 全局 static(任何线程 —
+   含 mod 自 spawn 的线程 — 都能调用全局 API,不受主线程限制)
 2. 构造 `Context` 传入用户函数
 3. 用 `catch_unwind` 包裹用户函数 — init 中 panic 不会穿过 FFI
    边界 abort,而是记录 `Init panicked: <msg>` 并以失败码返回
@@ -104,23 +105,27 @@ fn init(ctx: &mut Context) -> Result<(), MorrowError> {
 | `player_count()` | `i32` | 在线人数;host API 未注册时为 -1 |
 | `player_list()` | `Vec<String>` | 在线玩家名 |
 | `world_time()` | `i64` | 世界时间(ticks);未注册时为 -1 |
-| `register_command(name, fn(&str))` | — | 注册聊天命令;槽位池满(64/每 mod)时 panic,被 init 的 catch_unwind 接住 |
-| `config()` | `Option<String>` | 本 mod 的 config.toml 原文(≤4096 字节) |
+| `register_command(name, fn(&str))` | `Result<(), String>` | 注册聊天命令;命令名已被其他 mod 占用或槽位池满(64/每 mod)时返回 Err,槽位自动归还 |
+| `config_raw()` | `Option<String>` | 本 mod 的 config.toml 原文(≤4096 字节) |
+| `config::<T>()` | `Result<Option<T>, String>` | 解析为类型化结构,见[配置](#配置) |
 | `request_capability(&str)` | `u32` | 能力版本;0 = 不可用 |
 | `log(LogLevel, &str)` | — | 经 host 转发到 Minecraft log4j |
 
 ## 事件内的全局函数
 
-事件 handler 里可以直接用 crate 根自由函数(内部读 thread-local,
-init 后恒可用;未设置时消息调用 no-op、查询返回默认值):
+事件 handler 里可以直接用 crate 根自由函数。API vtable 存在全局
+static 中(init 后任何线程可用);在 init 之前调用会 **panic 并带
+明确消息**(显式错误优于静默 no-op),唯一例外是 [`log`] — 它永远
+可用(fallback 到 stderr):
 
 ```rust
 morrow::send_message("...");
 morrow::execute_command("say hi");
-morrow::player_count();   // -1 未注册
-morrow::player_list();    // Vec<String>
-morrow::world_time();     // -1 未注册
-morrow::config();         // Option<String>
+morrow::player_count();
+morrow::player_list();     // Vec<String>
+morrow::world_time();
+morrow::config::<MyCfg>(); // Result<Option<MyCfg>, String>
+morrow::config_raw();      // Option<String>
 morrow::log(LogLevel::Warn, "...");
 ```
 
@@ -143,16 +148,31 @@ morrow::error!("Failed: {}", err);
 - 打包时把 `config.toml` 放进 mod 目录即随 `.morrow` 包分发。
 - 读取按 **cargo 包名**(`CARGO_PKG_NAME`)键控 — 需与
   `manifest.toml` 的 `[package] name` 一致。
-- `ctx.config()` / `morrow::config()` 返回原始 TOML 文本(≤4096
-  字节),可按需自行解析(示例 `motd` 演示了手工解析 key=value)。
+- 推荐类型化读取:`ctx.config::<T>()`,结构体 derive
+  `serde::Deserialize` 并镜像 config.toml 的键。无 config.toml 时
+  返回 `Ok(None)`,解析失败返回带 TOML 行号的错误消息。
+- 需要原文时用 `ctx.config_raw()`(≤4096 字节)。
+
+```rust
+#[derive(serde::Deserialize)]
+struct Cfg { message: String, interval_seconds: u32 }
+
+let cfg: Cfg = ctx.config()?.unwrap_or(Cfg {
+    message: "Welcome!".into(),
+    interval_seconds: 60,
+});
+```
 
 ## 命令
 
 - `ctx.register_command(name, handler)`,handler 收到参数串(可为空)。
 - 底层 ABI 回调无 userdata,SDK 用预生成的 64 个 trampoline 槽位
   把命令名映射到 handler —— **每 mod 最多 64 个命令**。
-- 池满时 `register_command` panic → init 的 catch_unwind 接住 →
-  mod 以 `Init panicked: ...` 干净失败。
+- 命令名冲突(runtime 层全局命令表)与池满都会让
+  `register_command` 返回 `Err`,且失败的槽位会被归还 — 换名重试
+  依然可用。冲突不覆盖:先注册的 mod 保持所有权。
+- 命令 handler 可以自由调用全局 API(`send_message` 等)— runtime
+  在调用 handler 前已释放所有锁(runtime 内部按快照模式派发)。
 
 ## ABI 约束(开发者须知)
 

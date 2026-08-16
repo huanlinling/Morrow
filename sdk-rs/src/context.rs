@@ -76,28 +76,37 @@ impl Context {
     }
 
     /// Register a chat command. The handler receives the argument string
-    /// (possibly empty). Pool is capped at 64 commands per mod; when full,
-    /// this panics (caught by the generated `catch_unwind` in init).
-    pub fn register_command(&self, name: &str, handler: fn(&str)) {
-        let trampoline = __internal::register_command_slot(handler).unwrap_or_else(|| {
-            panic!(
-                "Morrow SDK: command pool exhausted (max {} commands per mod)",
+    /// (possibly empty).
+    ///
+    /// Errors: command pool full (64 commands per mod) or the name is
+    /// already registered by another mod (runtime-level conflict). On
+    /// error the pool slot is released, so retry with a different name
+    /// still works.
+    pub fn register_command(&self, name: &str, handler: fn(&str)) -> Result<(), String> {
+        let Some(trampoline) = __internal::register_command_slot(handler) else {
+            return Err(format!(
+                "command pool exhausted (max {} commands per mod)",
                 __internal::COMMAND_SLOT_COUNT
-            )
-        });
-        unsafe {
+            ));
+        };
+        let status = unsafe {
             (self.api.read().register_command)(
                 self.handle,
                 name.as_ptr(),
                 name.len() as u32,
                 trampoline,
             )
+        };
+        if status != 0 {
+            __internal::unregister_command_slot(trampoline);
+            return Err(format!("command '/{name}' already registered"));
         }
+        Ok(())
     }
 
     /// Read the mod's config.toml as raw TOML text (≤ 4096 bytes).
     /// None when the package has no config.toml.
-    pub fn config(&self) -> Option<String> {
+    pub fn config_raw(&self) -> Option<String> {
         let mut buf = [0u8; 4096];
         let n = unsafe {
             (self.api.read().get_config)(
@@ -109,6 +118,26 @@ impl Context {
             )
         };
         (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+    }
+
+    /// Read and parse the mod's config.toml into a typed struct.
+    ///
+    /// Returns `Ok(None)` when the package has no config.toml, `Ok(Some(..))`
+    /// on success, and an error message on parse failure or a malformed
+    /// schema — mod authors see exactly what TOML line failed to parse.
+    ///
+    /// ```ignore
+    /// #[derive(serde::Deserialize)]
+    /// struct Cfg { message: String, interval_seconds: u32 }
+    ///
+    /// let cfg: Cfg = ctx.config()?.unwrap_or(Cfg { ..defaults });
+    /// ```
+    pub fn config<T: serde::de::DeserializeOwned>(&self) -> Result<Option<T>, String> {
+        self.config_raw()
+            .map(|raw| {
+                toml::from_str(&raw).map_err(|e| format!("config.toml: {e}"))
+            })
+            .transpose()
     }
 
     /// Request a capability version. Returns 0 if unavailable.

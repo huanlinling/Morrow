@@ -10,7 +10,7 @@
 //!
 //! #[morrow::mod_main]
 //! fn init(ctx: &mut Context) -> Result<(), MorrowError> {
-//!     ctx.register_command("ping", ping);
+//!     ctx.register_command("ping", ping)?;
 //!     Ok(())
 //! }
 //!
@@ -42,7 +42,8 @@
 //!
 //! [`send_message`], [`execute_command`], [`player_count`], [`player_list`],
 //! [`world_time`], [`config`], [`log`] — thin wrappers over the runtime API,
-//! reading the current runtime from a thread-local set during init.
+//! reading the current runtime vtable from a global static set during init.
+//! Works from any thread (including threads the mod spawns itself).
 
 pub mod __internal;
 pub mod context;
@@ -90,54 +91,64 @@ pub enum LogLevel {
 
 // ─── Global API (event-side access) ─────────────
 //
-// Thread-local state is set by the generated `morrow_mod_init`; all event
-// dispatch happens on the same thread, so these are always populated in
-// handlers. Outside that (before init, or user-spawned threads) message
-// calls no-op and queries return their "unavailable" default.
+// The runtime vtable is stored in a global `static` (per-library, set by
+// the generated `morrow_mod_init`). These wrappers work from any thread —
+// including threads the mod spawns itself — because the vtable points at
+// process-global functions. If the runtime was never initialized (mod
+// code running outside init/handlers, or the library not loaded by the
+// host), these panic with a descriptive message rather than silently
+// no-oping; [`log`] is the exception and always works.
 
-/// Broadcast a message to all players' chat. No-op if runtime not set.
+/// Broadcast a message to all players' chat. Panics if runtime not set.
 pub fn send_message(msg: &str) {
-    __internal::with_api(|api| unsafe {
-        ((*api).send_message)(0, msg.as_ptr(), msg.len() as u32)
-    });
+    let api = __internal::api();
+    unsafe { (api.send_message)(0, msg.as_ptr(), msg.len() as u32) }
 }
 
-/// Run a server command. No-op if runtime not set.
+/// Run a server command. Panics if runtime not set.
 pub fn execute_command(cmd: &str) {
-    __internal::with_api(|api| unsafe {
-        ((*api).execute_command)(0, cmd.as_ptr(), cmd.len() as u32)
-    });
+    let api = __internal::api();
+    unsafe { (api.execute_command)(0, cmd.as_ptr(), cmd.len() as u32) }
 }
 
-/// Online player count, or -1 if the host API is not registered.
+/// Online player count. Panics if runtime not set.
 pub fn player_count() -> i32 {
-    __internal::with_api(|api| unsafe { ((*api).get_player_count)(0) }).unwrap_or(-1)
+    let api = __internal::api();
+    unsafe { (api.get_player_count)(0) }
 }
 
-/// Online player names. Empty when runtime not set.
+/// Online player names. Panics if runtime not set.
 pub fn player_list() -> Vec<String> {
+    let api = __internal::api();
     let mut buf = [0u8; 4096];
-    let n = __internal::with_api(|api| unsafe {
-        ((*api).get_player_list)(0, buf.as_mut_ptr(), buf.len() as u32)
-    })
-    .unwrap_or(0);
+    let n = unsafe { (api.get_player_list)(0, buf.as_mut_ptr(), buf.len() as u32) };
     parse_player_list(crate::read_str(buf.as_ptr(), n))
 }
 
-/// World time in ticks, or -1 if the host API is not registered.
+/// World time in ticks. Panics if runtime not set.
 pub fn world_time() -> i64 {
-    __internal::with_api(|api| unsafe { ((*api).get_world_time)(0) }).unwrap_or(-1)
+    let api = __internal::api();
+    unsafe { (api.get_world_time)(0) }
 }
 
-/// Read this mod's config.toml (raw TOML text). None when not set/packaged.
-pub fn config() -> Option<String> {
-    let name = __internal::current_mod_name()?;
+/// Read this mod's config.toml as raw TOML text. None when not set/packaged.
+pub fn config_raw() -> Option<String> {
+    let name = __internal::current_mod_name();
+    let api = __internal::api();
     let mut buf = [0u8; 4096];
-    let n = __internal::with_api(|api| unsafe {
-        ((*api).get_config)(0, name.as_ptr(), name.len() as u32, buf.as_mut_ptr(), buf.len() as u32)
-    })
-    .unwrap_or(0);
+    let n = unsafe {
+        (api.get_config)(0, name.as_ptr(), name.len() as u32, buf.as_mut_ptr(), buf.len() as u32)
+    };
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+}
+
+/// Read and parse this mod's config.toml into a typed struct
+/// (`Ok(None)` when the package has no config.toml). See
+/// [`Context::config`] for an example.
+pub fn config<T: serde::de::DeserializeOwned>() -> Result<Option<T>, String> {
+    config_raw()
+        .map(|raw| toml::from_str(&raw).map_err(|e| format!("config.toml: {e}")))
+        .transpose()
 }
 
 /// Log through the host; falls back to stderr when runtime not set.
@@ -160,8 +171,8 @@ pub mod prelude {
     pub use crate::runtime_api::RuntimeApi;
     pub use crate::LogLevel;
     pub use crate::{
-        config, error, execute_command, info, log, player_count, player_list, send_message,
-        warn, world_time,
+        config, config_raw, error, execute_command, info, log, player_count, player_list,
+        send_message, warn, world_time,
     };
     pub use morrow_macros::{event, mod_main};
 }

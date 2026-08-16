@@ -1,12 +1,19 @@
 package com.morrow.host;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Accumulates game events during a tick and provides a single
- * binary buffer for batch FFM dispatch.
+ * Accumulates game events during a tick and provides a single native
+ * buffer for batch FFM dispatch.
+ *
+ * <p>Writes directly into an off-heap {@link MemorySegment} allocated from
+ * a per-tick {@link Arena} (design.md §5.1: per-tick confined arena) —
+ * no Java-heap ByteBuffer round trip, no {@code Arena.global()} growth.
+ * The arena is closed in {@link #reset()}, which the host calls once per
+ * tick after dispatch, so freed memory is returned promptly.
  *
  * <p>Binary format:
  * <pre>
@@ -19,118 +26,131 @@ import java.nio.charset.StandardCharsets;
  *   field1 bytes
  *   field2 bytes (may be empty)
  * </pre>
+ * Tick events stuff the 8-byte tick number after the header (field1/2
+ * are empty) — 14 bytes total.
  */
 public class EventBuffer {
     private static final int INITIAL_CAPACITY = 4096;
-    // Not final: ensure() swaps in a larger buffer when capacity is exhausted.
-    private ByteBuffer buf = ByteBuffer.allocate(INITIAL_CAPACITY)
-            .order(ByteOrder.LITTLE_ENDIAN);
-    private int count;
+
+    private Arena arena;      // per-tick confined arena, closed on reset()
+    private MemorySegment seg;
+    private int pos;          // write cursor (bytes written)
+    private int count;        // events in the current batch
 
     public EventBuffer() {
-        buf.position(4); // reserve u32 count
+        reset();
     }
 
     public void tick(long tick) {
-        ensure(12);
-        buf.putShort((short) 0); // type
-        buf.putShort((short) 0); // field1_len
-        buf.putShort((short) 0); // field2_len
-        buf.putLong(tick);        // tick number stuffed after header
+        ensure(14);
+        seg.set(ValueLayout.JAVA_SHORT_UNALIGNED, pos, (short) 0); pos += 2;
+        seg.set(ValueLayout.JAVA_SHORT_UNALIGNED, pos, (short) 0); pos += 2;
+        seg.set(ValueLayout.JAVA_SHORT_UNALIGNED, pos, (short) 0); pos += 2;
+        seg.set(ValueLayout.JAVA_LONG_UNALIGNED, pos, tick); pos += 8;
         count++;
     }
 
     public void playerJoin(String name) {
         byte[] b = name.getBytes(StandardCharsets.UTF_8);
-        ensure(6 + b.length);
-        buf.putShort((short) 1);
-        buf.putShort((short) b.length);
-        buf.putShort((short) 0);
-        buf.put(b);
+        header(1, b.length, 0);
+        putBytes(b);
         count++;
     }
 
     public void playerLeave(String name) {
         byte[] b = name.getBytes(StandardCharsets.UTF_8);
-        ensure(6 + b.length);
-        buf.putShort((short) 2);
-        buf.putShort((short) b.length);
-        buf.putShort((short) 0);
-        buf.put(b);
+        header(2, b.length, 0);
+        putBytes(b);
         count++;
     }
 
     public void chat(String player, String msg) {
         byte[] p = player.getBytes(StandardCharsets.UTF_8);
         byte[] m = msg.getBytes(StandardCharsets.UTF_8);
-        ensure(6 + p.length + m.length);
-        buf.putShort((short) 3);
-        buf.putShort((short) p.length);
-        buf.putShort((short) m.length);
-        buf.put(p);
-        buf.put(m);
+        header(3, p.length, m.length);
+        putBytes(p);
+        putBytes(m);
         count++;
     }
 
     public void blockBreak(String player, String block) {
         byte[] p = player.getBytes(StandardCharsets.UTF_8);
         byte[] b = block.getBytes(StandardCharsets.UTF_8);
-        ensure(6 + p.length + b.length);
-        buf.putShort((short) 4);
-        buf.putShort((short) p.length);
-        buf.putShort((short) b.length);
-        buf.put(p);
-        buf.put(b);
+        header(4, p.length, b.length);
+        putBytes(p);
+        putBytes(b);
         count++;
     }
 
     public void blockPlace(String player, String block) {
         byte[] p = player.getBytes(StandardCharsets.UTF_8);
         byte[] b = block.getBytes(StandardCharsets.UTF_8);
-        ensure(6 + p.length + b.length);
-        buf.putShort((short) 5);
-        buf.putShort((short) p.length);
-        buf.putShort((short) b.length);
-        buf.put(p);
-        buf.put(b);
+        header(5, p.length, b.length);
+        putBytes(p);
+        putBytes(b);
         count++;
     }
 
     public void playerDeath(String player) {
         byte[] b = player.getBytes(StandardCharsets.UTF_8);
-        ensure(6 + b.length);
-        buf.putShort((short) 6);
-        buf.putShort((short) b.length);
-        buf.putShort((short) 0);
-        buf.put(b);
+        header(6, b.length, 0);
+        putBytes(b);
         count++;
     }
 
-    /** Finalize and return the buffer. Call once per tick. */
-    public ByteBuffer finish() {
-        buf.putInt(0, count); // write count at position 0
-        buf.flip();
-        return buf;
+    /** Finalize the batch: stamp the event count at offset 0. */
+    public MemorySegment finish() {
+        seg.set(ValueLayout.JAVA_INT_UNALIGNED, 0, count);
+        return seg;
     }
 
-    /** Reset for the next tick batch. Call after finish() is consumed. */
+    /** Bytes written (excluding the reserved count slot's padding — i.e.
+     *  the exact payload length to pass to FFM dispatch). */
+    public int size() {
+        return pos;
+    }
+
+    /**
+     * Start a fresh batch: close the previous tick's arena (frees its
+     * memory immediately) and allocate a new one. Called by the host
+     * after each dispatch.
+     */
     public void reset() {
+        if (arena != null) {
+            arena.close();
+        }
+        arena = Arena.ofConfined();
+        seg = arena.allocate(INITIAL_CAPACITY);
+        pos = 4; // reserve u32 count slot
         count = 0;
-        buf.clear();
-        buf.position(4); // reserve u32 count slot again
     }
 
-    public boolean isEmpty() { return count == 0; }
+    public boolean isEmpty() {
+        return count == 0;
+    }
 
+    private void header(int type, int len1, int len2) {
+        ensure(6);
+        seg.set(ValueLayout.JAVA_SHORT_UNALIGNED, pos, (short) type); pos += 2;
+        seg.set(ValueLayout.JAVA_SHORT_UNALIGNED, pos, (short) len1); pos += 2;
+        seg.set(ValueLayout.JAVA_SHORT_UNALIGNED, pos, (short) len2); pos += 2;
+    }
+
+    private void putBytes(byte[] b) {
+        ensure(b.length);
+        MemorySegment.copy(MemorySegment.ofArray(b), 0, seg, pos, b.length);
+        pos += b.length;
+    }
+
+    /** Grow the segment (within the same arena) when capacity is short.
+     *  Confined arenas allow multiple allocations; old segment becomes
+     *  garbage and is freed with the arena at reset(). */
     private void ensure(int extra) {
-        if (buf.remaining() < extra) {
-            // Grow: double capacity (previous code copied back into the
-            // same-size buffer, so it never actually grew)
-            int newCap = Math.max(buf.capacity() * 2, buf.capacity() + extra);
-            ByteBuffer bigger = ByteBuffer.allocate(newCap).order(ByteOrder.LITTLE_ENDIAN);
-            buf.flip();
-            bigger.put(buf);
-            buf = bigger;
+        if (pos + extra > seg.byteSize()) {
+            long newCap = Math.max(seg.byteSize() * 2, pos + extra);
+            MemorySegment bigger = arena.allocate(newCap);
+            MemorySegment.copy(seg, 0, bigger, 0, pos);
+            seg = bigger;
         }
     }
 }

@@ -1,47 +1,74 @@
 //! SDK 内部机制 — 不属于公共 API。
 //!
-//! 每个 mod 是独立 cdylib,本模块的 `static`/`thread_local` 都是
-//! per-library 的,天然与其他 mod 隔离。
+//! 每个 mod 是独立 cdylib,本模块的 `static` 都是 per-library 的,
+//! 天然与其他 mod 隔离。
 
 use crate::RuntimeApi;
-use std::cell::Cell;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 // ---------------------------------------------------------------------------
-// 当前 Runtime API(thread-local)
+// 当前 Runtime API(全局 static)
 // ---------------------------------------------------------------------------
 //
 // 由 `#[morrow::mod_main]` 生成的 `morrow_mod_init` 在开头写入。
-// 事件派发与 init 同在 Minecraft server 主线程(Mixin 注入点:
-// loadWorld / tick / shutdown),自由函数与日志宏在此读取。
+//
+// 为什么是全局 static 而不是 thread_local:runtime 传入的 vtable 是
+// 进程内全局静态函数表(runtime 侧 `Box::leak` 保证 'static),本身与
+// 线程无关。用全局 static 后,mod 自 spawn 的线程也能调用全局 API
+// (send_message 等)并正确工作 — thread_local 版本里那些调用会静默
+// no-op,是隐藏 bug 的来源。每个 mod 是独立 cdylib,这里的 static 是
+// 该库私有的,不会跨 mod 串扰。
+//
+// 错误语义:未初始化(init 之外、或库未被 runtime 加载)时,消息类
+// 自由函数显式 panic(带定位信息)而不是静默丢弃;唯一例外是日志,
+// 它永远可用(fallback 到 stderr),因为日志在错误路径上更要工作。
 
-thread_local! {
-    static CURRENT: Cell<Option<(*const RuntimeApi, &'static str)>> = const { Cell::new(None) };
-}
+static API: OnceLock<(&'static RuntimeApi, &'static str)> = OnceLock::new();
 
 #[doc(hidden)]
 pub fn store_api(api: *const RuntimeApi, mod_name: &'static str) {
-    CURRENT.with(|c| c.set(Some((api, mod_name))));
+    // vtable 由 runtime 泄漏,进程存活期间恒有效,转 &'static 是 sound 的。
+    let api_ref: &'static RuntimeApi = unsafe { &*api };
+    // 同一库被重复 init(罕见)时保留第一个 — 值等价,无实际影响。
+    let _ = API.set((api_ref, mod_name));
 }
 
+/// 当前 `RuntimeApi` vtable。未初始化时 panic — 在 init 之外调用全局
+/// API 是编程错误,显式失败优于静默 no-op。
 #[doc(hidden)]
-pub fn with_api<R>(f: impl FnOnce(*const RuntimeApi) -> R) -> Option<R> {
-    CURRENT.with(|c| c.get()).map(|(api, _)| f(api))
+#[inline]
+pub fn api() -> &'static RuntimeApi {
+    API.get()
+        .expect(
+            "Morrow SDK: runtime API not initialized — \
+             call this from a #[morrow::mod_main] init or an event handler",
+        )
+        .0
 }
 
+/// 当前 mod 名(config 按此键控)。未初始化时 panic,同上。
 #[doc(hidden)]
-pub fn current_mod_name() -> Option<&'static str> {
-    CURRENT.with(|c| c.get()).map(|(_, n)| n)
+#[inline]
+pub fn current_mod_name() -> &'static str {
+    API.get()
+        .expect(
+            "Morrow SDK: runtime API not initialized — \
+             call this from a #[morrow::mod_main] init or an event handler",
+        )
+        .1
 }
 
 // ---------------------------------------------------------------------------
 // 日志:host log(转发 Java log4j),未设置时 fallback eprintln
 // ---------------------------------------------------------------------------
+//
+// 刻意不 panic:日志在错误路径上是最需要的工具,永远可用。
 
 #[doc(hidden)]
 pub fn log(level: u32, msg: &str) {
-    if with_api(|api| unsafe { ((*api).log)(0, level, msg.as_ptr(), msg.len() as u32) }).is_none() {
-        eprintln!("{}", msg);
+    match API.get() {
+        Some((api, _)) => unsafe { (api.log)(0, level, msg.as_ptr(), msg.len() as u32) },
+        None => eprintln!("{}", msg),
     }
 }
 
@@ -89,4 +116,22 @@ pub fn register_command_slot(handler: fn(&str)) -> Option<unsafe extern "C" fn(*
     let idx = slots.iter().position(|s| s.is_none())?;
     slots[idx] = Some(handler);
     Some(COMMAND_TRAMPOLINES[idx])
+}
+
+/// 归还一个命令槽(注册被 runtime 拒绝时)。返回是否找到了该槽。
+#[doc(hidden)]
+pub fn unregister_command_slot(
+    trampoline: unsafe extern "C" fn(*const u8, u32),
+) -> bool {
+    let mut slots = COMMAND_SLOTS.lock().unwrap();
+    match COMMAND_TRAMPOLINES
+        .iter()
+        .position(|t| std::ptr::fn_addr_eq(*t, trampoline))
+    {
+        Some(idx) if slots[idx].is_some() => {
+            slots[idx] = None;
+            true
+        }
+        _ => false,
+    }
 }

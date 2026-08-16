@@ -1,25 +1,29 @@
 //! motd — reads its welcome message from config.toml and greets every
-//! joining player. Demonstrates config access with zero unsafe.
+//! joining player. Demonstrates typed config parsing with zero unsafe.
 
 use morrow::prelude::*;
+use serde::Deserialize;
 
-/// Parse `message = "..."` out of config.toml (raw TOML text).
+/// Must mirror the keys in `config.toml` at the package root:
+/// ```toml
+/// message = "Welcome to the Morrow server!"
+/// ```
+#[derive(Deserialize)]
+struct MotdConfig {
+    message: String,
+}
+
 fn motd() -> String {
-    morrow::config()
-        .and_then(|cfg| {
-            cfg.lines().find_map(|line| {
-                line.trim()
-                    .split_once('=')
-                    .filter(|(k, _)| k.trim() == "message")
-                    .map(|(_, v)| v.trim().trim_matches('"').to_string())
-            })
-        })
+    morrow::config::<MotdConfig>()
+        .ok()
+        .flatten()
+        .map(|c| c.message)
         .unwrap_or_else(|| "Welcome to the server!".to_string())
 }
 
 #[morrow::mod_main]
 fn init(ctx: &mut Context) -> Result<(), MorrowError> {
-    ctx.register_command("motd", motd_cmd);
+    ctx.register_command("motd", motd_cmd)?;
     morrow::info!("MOTD: {}", motd());
     Ok(())
 }

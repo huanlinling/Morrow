@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "runtime-rs",
+    "runtime-rs/tests/fixtures/testmod",
     "sdk-rs",
     "sdk-rs/morrow-macros",
     "examples/hello-morrow",

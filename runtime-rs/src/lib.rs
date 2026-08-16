@@ -10,7 +10,9 @@
 mod abi;
 mod error;
 mod event;
-mod host_api;
+/// Host ↔ runtime ABI types ([`host_api::HostVtable`] is the vtable Java
+/// registers; it is `pub` so integration tests and tooling can build one).
+pub mod host_api;
 mod logger;
 mod mod_loader;
 mod panic;
@@ -712,25 +714,40 @@ pub extern "C" fn morrow_get_mod_config(
 // ---------------------------------------------------------------------------
 
 /// Register a command (called by mods during init via RuntimeApi).
+/// Returns 0 on success, 1 if the name is already taken (conflicting
+/// registration is a config error — surfaced to the mod, not overwritten).
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_register_command(
     runtime_handle: u64,
     name_ptr: *const u8,
     name_len: u32,
     callback: host_api::CommandCallback,
-) {
-    panic::ffi_boundary((), || {
+) -> u32 {
+    panic::ffi_boundary(1, || {
         if name_ptr.is_null() {
-            return;
+            return 1;
         }
         let name = unsafe {
             let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
             std::str::from_utf8(bytes).unwrap_or("<invalid>")
         };
-        with_runtime(runtime_handle, |kernel| {
-            kernel.data().commands.register(name, callback);
+        let result = with_runtime(runtime_handle, |kernel| {
+            kernel.data().commands.register(name, callback)
         });
-        eprintln!("[Morrow] Command registered: /{name}");
+        match result {
+            Some(Ok(())) => {
+                eprintln!("[Morrow] Command registered: /{name}");
+                0
+            }
+            Some(Err(e)) => {
+                eprintln!("[Morrow] ERROR: {e}");
+                1
+            }
+            None => {
+                eprintln!("[Morrow] ERROR: no live runtime (handle={runtime_handle})");
+                1
+            }
+        }
     })
 }
 
@@ -756,11 +773,23 @@ pub extern "C" fn morrow_dispatch_command(
             let bytes = std::slice::from_raw_parts(args_ptr, args_len as usize);
             std::str::from_utf8(bytes).unwrap_or("")
         };
-        with_runtime(runtime_handle, |kernel| {
-            kernel.data().commands.dispatch(name, args)
+        // Snapshot the callback under the runtime lock, then run it
+        // outside — the handler may re-enter the API (send_message,
+        // execute_command, register_command, ...), each of which takes
+        // the runtime data lock again.
+        let handled = with_runtime(runtime_handle, |kernel| {
+            kernel.data().commands.lookup(name)
         })
-        .map(|handled| if handled { 1 } else { 0 })
-        .unwrap_or(0)
+        .flatten()
+        .map(|cb| {
+            let b = args.as_bytes();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                unsafe { cb(b.as_ptr(), b.len() as u32); }
+            }));
+            true
+        })
+        .unwrap_or(false);
+        if handled { 1 } else { 0 }
     })
 }
 

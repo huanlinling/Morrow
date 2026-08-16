@@ -413,6 +413,8 @@ name = "morrow"
 version = "0.1.0"
 dependencies = [
  "morrow-macros",
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -432,6 +434,7 @@ dependencies = [
  "log",
  "serde",
  "tempfile",
+ "testmod",
  "toml",
  "zip",
 ]
@@ -441,6 +444,7 @@ name = "motd"
 version = "0.1.0"
 dependencies = [
  "morrow",
+ "serde",
 ]
 
 [[package]]
@@ -627,6 +631,13 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys",
+]
+
+[[package]]
+name = "testmod"
+version = "0.1.0"
+dependencies = [
+ "morrow",
 ]
 
 [[package]]

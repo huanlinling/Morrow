@@ -4,11 +4,12 @@
 pub struct RuntimeApi {
     pub get_player_count: unsafe extern "C" fn(runtime_handle: u64) -> i32,
     pub send_message: unsafe extern "C" fn(runtime_handle: u64, msg_ptr: *const u8, msg_len: u32),
+    /// Returns 0 on success, non-zero if the name is already registered.
     pub register_command: unsafe extern "C" fn(
         runtime_handle: u64,
         name_ptr: *const u8, name_len: u32,
         callback: unsafe extern "C" fn(*const u8, u32),
-    ),
+    ) -> u32,
     pub get_player_list: unsafe extern "C" fn(runtime_handle: u64, buf: *mut u8, buf_cap: u32) -> u32,
     pub execute_command: unsafe extern "C" fn(runtime_handle: u64, cmd_ptr: *const u8, cmd_len: u32),
     pub get_world_time: unsafe extern "C" fn(runtime_handle: u64) -> i64,

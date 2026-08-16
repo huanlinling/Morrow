@@ -5,7 +5,9 @@ edition = "2021"
 description = "Morrow Runtime Core — Rust cdylib for Minecraft native modding"
 
 [lib]
-crate-type = ["cdylib"]
+# rlib so integration tests (tests/mod_loader_integration.rs) can link
+# against the crate; cdylib is what ships in the runtime image.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 zip = "2"
@@ -14,3 +16,10 @@ serde = { version = "1", features = ["derive"] }
 libloading = "0.8"
 log = "0.4"
 tempfile = "3"
+
+[dev-dependencies]
+# The integration test (tests/mod_loader_integration.rs) packages the
+# fixture cdylib into a .morrow zip and loads it through the real loader.
+zip = "2"
+tempfile = "3"
+testmod = { path = "tests/fixtures/testmod" }

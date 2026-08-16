@@ -6,3 +6,5 @@ description = "Morrow SDK — Rust crate for building Minecraft mods"
 
 [dependencies]
 morrow-macros = { path = "morrow-macros" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

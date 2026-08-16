@@ -4,7 +4,7 @@ use morrow::prelude::*;
 
 #[morrow::mod_main]
 fn init(ctx: &mut Context) -> Result<(), MorrowError> {
-    match ctx.config() {
+    match ctx.config_raw() {
         Some(cfg) => morrow::info!("config.toml: {} bytes", cfg.len()),
         None => morrow::info!("no config.toml packaged"),
     }
@@ -14,7 +14,7 @@ fn init(ctx: &mut Context) -> Result<(), MorrowError> {
             morrow::info!("Cap {}: v{}", cap, v);
         }
     }
-    ctx.register_command("morrow", morrow_cmd);
+    ctx.register_command("morrow", morrow_cmd)?;
     Ok(())
 }
 

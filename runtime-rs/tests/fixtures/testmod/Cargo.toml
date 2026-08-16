@@ -1,0 +1,11 @@
+[package]
+name = "testmod"
+version = "0.1.0"
+edition = "2021"
+description = "Integration-test mod — built as a cdylib and loaded through the real Morrow loader"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+morrow = { path = "../../../../sdk-rs" }

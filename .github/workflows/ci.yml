@@ -44,3 +44,5 @@ jobs:
           nm -D target/release/libmorrow_runtime.so | grep -E ' morrow_(init|shutdown|load_mod|dispatch_batch|register_host_api)$'
           nm -D target/release/libhello_morrow.so | grep -c 'morrow_mod_' | grep -q '10' \
             && echo "hello-morrow exports all 9 event kinds + init"
+          nm -D target/release/libtestmod.so | grep -c 'morrow_mod_' | grep -q '8' \
+            && echo "testmod fixture exports its 7 event kinds + init"

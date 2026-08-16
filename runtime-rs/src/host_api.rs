@@ -15,7 +15,7 @@ pub struct RuntimeApi {
         runtime_handle: u64,
         name_ptr: *const u8, name_len: u32,
         callback: unsafe extern "C" fn(*const u8, u32),
-    ),
+    ) -> u32,
     pub get_player_list: unsafe extern "C" fn(runtime_handle: u64, buf: *mut u8, buf_cap: u32) -> u32,
     pub execute_command: unsafe extern "C" fn(runtime_handle: u64, cmd_ptr: *const u8, cmd_len: u32),
     pub get_world_time: unsafe extern "C" fn(runtime_handle: u64) -> i64,
@@ -212,16 +212,42 @@ pub struct CommandRegistry {
 
 impl CommandRegistry {
     pub fn new() -> Self { CommandRegistry { commands: Mutex::new(HashMap::new()) } }
-    pub fn register(&self, name: &str, callback: CommandCallback) {
-        self.commands.lock().unwrap().insert(name.to_string(), callback);
+    /// Register a command. Rejects duplicate names — a second mod (or the
+    /// same mod) claiming the same command is a config error that must be
+    /// surfaced, not silently overwritten.
+    pub fn register(&self, name: &str, callback: CommandCallback) -> Result<(), String> {
+        let mut guard = self.commands.lock().unwrap();
+        if guard.contains_key(name) {
+            return Err(format!("command '/{name}' already registered by another mod"));
+        }
+        guard.insert(name.to_string(), callback);
+        Ok(())
     }
+    /// Snapshot the callback for `name`, if registered (function pointers
+    /// are `Copy`). Never call the callback from a context that holds the
+    /// runtime's data lock — handlers re-enter the API.
+    pub fn lookup(&self, name: &str) -> Option<CommandCallback> {
+        self.commands.lock().unwrap().get(name).copied()
+    }
+
+    /// Dispatch `args` to the handler for `name`.
+    ///
+    /// The callback is snapshotted under the registry lock and invoked
+    /// with no locks held — handlers may re-enter the runtime API
+    /// (send_message, execute_command, register_command, ...) which
+    /// itself takes the runtime's data lock. Callers must not hold that
+    /// data lock across this call.
     pub fn dispatch(&self, name: &str, args: &str) -> bool {
-        let guard = self.commands.lock().unwrap();
-        if let Some(cb) = guard.get(name) {
-            let b = args.as_bytes();
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(b.as_ptr(), b.len() as u32); }));
-            true
-        } else { false }
+        match self.lookup(name) {
+            Some(cb) => {
+                let b = args.as_bytes();
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    unsafe { cb(b.as_ptr(), b.len() as u32); }
+                }));
+                true
+            }
+            None => false,
+        }
     }
 }
 

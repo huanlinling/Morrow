@@ -4,7 +4,7 @@ use morrow::prelude::*;
 
 #[morrow::mod_main]
 fn init(ctx: &mut Context) -> Result<(), MorrowError> {
-    ctx.register_command("ping", ping);
+    ctx.register_command("ping", ping)?;
     morrow::info!("Chat bot online! Say hi or /ping");
     Ok(())
 }

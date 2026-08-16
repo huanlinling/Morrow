@@ -111,12 +111,12 @@ public class MorrowMod {
     public static void flushBatch() {
         if (dispatchBatch == null || eventBuffer.isEmpty()) return;
         try {
-            var buf = eventBuffer.finish();
-            var seg = Arena.global().allocate(buf.remaining());
-            seg.copyFrom(MemorySegment.ofBuffer(buf));
-            dispatchBatch.invokeExact(runtimeHandle, seg, buf.remaining());
+            // EventBuffer owns a per-tick confined arena — the segment is
+            // native memory, no Java-heap copy, no Arena.global() growth.
+            var seg = eventBuffer.finish();
+            dispatchBatch.invokeExact(runtimeHandle, seg, eventBuffer.size());
         } catch (Throwable e) { LOG.error("batch: {}", e.getMessage()); }
-        finally { eventBuffer.reset(); } // always start the next tick clean
+        finally { eventBuffer.reset(); } // close arena + start the next tick clean
     }
 
     // ─── Shutdown (called from Mixin) ────────────
