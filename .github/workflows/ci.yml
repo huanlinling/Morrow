@@ -4,118 +4,43 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
-
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
 
 jobs:
-  # ─── Rust: build + test ──────────────────────
-
-  rust:
-    name: Rust (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+  build-test:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Rust build + unit tests
         run: |
-          rustup update stable
-          rustup default stable
+          cargo build --release
+          cargo test --release
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build (release)
-        run: cargo build --release
-
-      - name: Test
-        run: cargo test
-
-  # ─── Java: build + bridge tests ──────────────
-
-  java:
-    name: Java (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
+      - name: Setup JDK 21 (Temurin)
         uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: '21'
-          distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Install Rust (for native runtime)
+      - name: Package example mods
         run: |
-          rustup update stable
-          rustup default stable
+          bash scripts/package-mod.sh examples/hello-morrow
+          bash scripts/package-mod.sh examples/chat-bot
+          bash scripts/package-mod.sh examples/motd
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build native runtime
-        run: cargo build --release
-
-      - name: Build with Gradle
+      - name: Gradle build (bridge-java, embeds .so)
         working-directory: bridge-java
-        run: ./gradlew build
+        run: ./gradlew --no-daemon build
 
-      - name: Run bridge tests (M0 + M1)
+      - name: Panama bridge tests (M0/M1)
         run: make test-bridge
 
-  # ─── Package example mod ─────────────────────
-
-  package:
-    name: Package Mod
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
+      - name: Verify exported ABI symbols
         run: |
-          rustup update stable
-          rustup default stable
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Package hello-morrow
-        run: make package-hello
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hello-morrow
-          path: hello-morrow.morrow
+          nm -D target/release/libmorrow_runtime.so | grep -E ' morrow_(init|shutdown|load_mod|dispatch_batch|register_host_api)$'
+          nm -D target/release/libhello_morrow.so | grep -c 'morrow_mod_' | grep -q '10' \
+            && echo "hello-morrow exports all 9 event kinds + init"

@@ -205,18 +205,23 @@ fn init(ctx: &mut Context) -> Result<(), MorrowError> {
 ## Milestone 6: Linux Verification
 
 **预计时间：** 1 周
-**依赖：** M4
-**状态：** ⬜ Planned
+**依赖：** M5
+**状态：** 🔨 In Progress
 
 ### 任务清单
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 6.1 | Linux native build 完整流程 | ⬜ |
-| 6.2 | Dedicated server 部署测试 | ⬜ |
-| 6.3 | 长时间稳定性测试（1 小时） | ⬜ |
-| 6.4 | CI: Ubuntu build + test | ⬜ |
-| 6.5 | 修复平台特定问题 | ⬜ |
+| 6.1 | Linux native build 完整流程 | ✅ |
+| 6.2 | Dedicated server 部署测试 | ✅ |
+| 6.3 | 长时间稳定性测试（1 小时） | 🔨 |
+| 6.4 | CI: Ubuntu build + test | 🔨 |
+| 6.5 | 修复平台特定问题 | ✅ |
+
+实现说明:Docker 三阶段构建(cargo → gradle → runtime 镜像)+ loom
+runServer 冒烟即为 6.1/6.2 的验证;6.5 在冒烟中暴露并修复了两个
+稳定性 bug(事件回调期 RuntimeApi 悬垂指针 → SIGSEGV;EventBuffer
+缺 reset → tick 事件丢失),见 v0.15。
 
 ### 验收标准
 
