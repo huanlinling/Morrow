@@ -1,0 +1,10 @@
+.git
+.github
+target
+**/target
+bridge-java/out
+bridge-java/build
+bridge-java/.gradle
+bridge-java/run
+**/*.morrow
+*.morrow

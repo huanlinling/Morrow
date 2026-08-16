@@ -1,8 +1,8 @@
 [package]
-name = "chat-bot"
+name = "motd"
 version = "0.1.0"
 edition = "2021"
-description = "Morrow chat bot example — responds to messages"
+description = "Morrow example — welcome message from config.toml"
 
 [lib]
 crate-type = ["cdylib"]

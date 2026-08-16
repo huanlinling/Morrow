@@ -6,4 +6,5 @@ members = [
     "sdk-rs/morrow-macros",
     "examples/hello-morrow",
     "examples/chat-bot",
+    "examples/motd",
 ]

@@ -1,20 +1,56 @@
 //! Runtime kernel — the heart of Morrow.
 //!
-//! Holds the runtime state and will eventually own the mod registry,
-//! event bus, and capability table (added in later milestones).
+//! Owns every per-runtime registry (mods, tick callbacks, events, host
+//! API, quarantine, config, errors). One object, one lock, one lifetime:
+//! creating a kernel on `morrow_init` and dropping it on `morrow_shutdown`
+//! releases everything — no leaked global state across runtimes.
 
 pub mod state;
 
+use crate::error::ErrorChannel;
+use crate::event::tick::TickRegistry;
+use crate::host_api::{
+    CommandRegistry, ConfigStore, HostApi, ModEventCallbacks, Quarantine, WorldSnapshot,
+};
+use crate::mod_loader::ModRegistry;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use state::RuntimeState;
+
+/// All per-runtime mutable state, behind one lock.
+///
+/// Kept in a single `Mutex` so a tick dispatch grabs exactly one lock
+/// instead of the previous eight global maps. Callbacks are always
+/// collected (cloned) out of the lock and invoked after it is released,
+/// so a mod re-entering the runtime API can never deadlock.
+pub struct RuntimeData {
+    pub registry: ModRegistry,
+    pub tick: TickRegistry,
+    pub lifecycle: LifecycleRegistry,
+    pub errors: ErrorChannel,
+    pub host_api: HostApi,
+    pub commands: CommandRegistry,
+    pub quarantines: Quarantine,
+    pub configs: ConfigStore,
+    pub events: ModEventCallbacks,
+    /// World snapshot refreshed once per tick (v0.14 PlayerSnapshot).
+    pub snapshot: Option<WorldSnapshot>,
+}
 
 /// The Morrow Runtime kernel.
 ///
 /// Created by `morrow_init`, destroyed by `morrow_shutdown`.
-/// In Milestone 1 this is intentionally minimal — just the state
-/// machine. Mod registry, event bus, and capability system will
-/// be added in M3/M4/M5.
+/// All state lives in [`RuntimeData`]; the state machine guards
+/// the lifecycle.
 pub struct RuntimeKernel {
-    state: RuntimeState,
+    data: Mutex<RuntimeData>,
+    state: Mutex<RuntimeState>,
+}
+
+/// Per-runtime lifecycle callbacks.
+pub struct LifecycleRegistry {
+    pub server_start: HashMap<String, unsafe extern "C" fn()>,
+    pub server_stop: HashMap<String, unsafe extern "C" fn()>,
 }
 
 impl RuntimeKernel {
@@ -23,37 +59,59 @@ impl RuntimeKernel {
     /// Called from `morrow_init` after ABI version check passes.
     pub fn new() -> Self {
         RuntimeKernel {
-            state: RuntimeState::Ready,
+            data: Mutex::new(RuntimeData {
+                registry: ModRegistry::new(),
+                tick: TickRegistry::new(),
+                lifecycle: LifecycleRegistry {
+                    server_start: HashMap::new(),
+                    server_stop: HashMap::new(),
+                },
+                errors: ErrorChannel::new(),
+                host_api: HostApi::new(),
+                commands: CommandRegistry::new(),
+                quarantines: Quarantine::new(),
+                configs: ConfigStore::new(),
+                events: ModEventCallbacks::new(),
+                snapshot: None,
+            }),
+            state: Mutex::new(RuntimeState::Ready),
         }
+    }
+
+    /// Lock the kernel's data for read/write.
+    pub fn data(&self) -> std::sync::MutexGuard<'_, RuntimeData> {
+        self.data.lock().unwrap()
     }
 
     /// Current runtime state.
     #[allow(dead_code)] // used in M3+ for state checks
     pub fn state(&self) -> RuntimeState {
-        self.state
+        *self.state.lock().unwrap()
     }
 
     /// Begin shutdown. Transitions Ready → ShuttingDown.
     ///
     /// Returns `Err` with the current state if the transition is illegal.
-    pub fn begin_shutdown(&mut self) -> Result<(), RuntimeState> {
+    pub fn begin_shutdown(&self) -> Result<(), RuntimeState> {
+        let mut state = self.state.lock().unwrap();
         let target = RuntimeState::ShuttingDown;
-        if self.state.can_transition_to(target) {
-            self.state = target;
+        if state.can_transition_to(target) {
+            *state = target;
             Ok(())
         } else {
-            Err(self.state)
+            Err(*state)
         }
     }
 
     /// Complete shutdown. Transitions ShuttingDown → Dead.
-    pub fn finish_shutdown(&mut self) -> Result<(), RuntimeState> {
+    pub fn finish_shutdown(&self) -> Result<(), RuntimeState> {
+        let mut state = self.state.lock().unwrap();
         let target = RuntimeState::Dead;
-        if self.state.can_transition_to(target) {
-            self.state = target;
+        if state.can_transition_to(target) {
+            *state = target;
             Ok(())
         } else {
-            Err(self.state)
+            Err(*state)
         }
     }
 }
@@ -70,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_full_lifecycle() {
-        let mut rt = RuntimeKernel::new();
+        let rt = RuntimeKernel::new();
         assert_eq!(rt.state(), RuntimeState::Ready);
 
         assert!(rt.begin_shutdown().is_ok());
@@ -82,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_double_shutdown_is_error() {
-        let mut rt = RuntimeKernel::new();
+        let rt = RuntimeKernel::new();
         rt.begin_shutdown().unwrap();
         rt.finish_shutdown().unwrap();
 
@@ -94,9 +152,21 @@ mod tests {
     fn test_cycle_10_times() {
         // Simulate init → shutdown × 10 using fresh kernels each time
         for _ in 0..10 {
-            let mut rt = RuntimeKernel::new();
+            let rt = RuntimeKernel::new();
             rt.begin_shutdown().unwrap();
             rt.finish_shutdown().unwrap();
         }
+    }
+
+    #[test]
+    fn test_shutdown_drops_all_registries() {
+        // Fresh kernel has empty registries (the old 8-global-map design
+        // leaked these; here they live and die with the kernel).
+        let rt = RuntimeKernel::new();
+        let data = rt.data();
+        assert_eq!(data.registry.len(), 0);
+        assert!(data.events.player_join.is_empty());
+        assert_eq!(data.quarantines.count(), 0);
+        assert!(!data.commands.dispatch("nope", ""));
     }
 }

@@ -2,6 +2,10 @@
 //!
 //! This is the Rust cdylib loaded by the Java host via Panama FFM.
 //! All public symbols are `extern "C"` and use the platform C ABI.
+//!
+//! State model: every runtime handle maps to exactly one [`RuntimeKernel`]
+//! in the global `RUNTIMES` table. All per-runtime registries live inside
+//! the kernel and die with it — `morrow_shutdown` cannot leak state.
 
 mod abi;
 mod error;
@@ -12,19 +16,36 @@ mod mod_loader;
 mod panic;
 mod runtime;
 
-use abi::handles::HandleTable;
-use mod_loader::ModRegistry;
+use abi::handles::{Handle, HandleTable};
+use event::tick::TickCallback;
+use host_api::WorldSnapshot;
 use runtime::RuntimeKernel;
 use std::path::Path;
 use std::sync::LazyLock;
 
 // ---------------------------------------------------------------------------
-// Global registries
+// Global registry of live runtime kernels, keyed by opaque handle.
 // ---------------------------------------------------------------------------
 
-/// Registry of live runtime kernels, keyed by opaque handle.
 static RUNTIMES: LazyLock<HandleTable<RuntimeKernel>> =
     LazyLock::new(HandleTable::new);
+
+/// Look up a runtime kernel by its u64 handle.
+///
+/// A handle of `0` means "any live runtime" (the mod-facing API
+/// convention — mods never know their own handle). Returns `None`
+/// when no runtime matches.
+fn with_runtime<F, R>(runtime_handle: u64, f: F) -> Option<R>
+where
+    F: FnOnce(&RuntimeKernel) -> R,
+{
+    if runtime_handle == 0 {
+        RUNTIMES.with_first(f)
+    } else {
+        Handle::from_u64(runtime_handle)
+            .and_then(|h| RUNTIMES.with(h, f))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // M0: add — first proof of the Panama bridge (retained)
@@ -51,14 +72,11 @@ pub extern "C" fn morrow_init(abi_version: u32) -> u64 {
             return 0;
         }
 
-        let kernel = RuntimeKernel::new();
-        let handle = RUNTIMES.insert(kernel);
-
         // Init logger (only once)
         logger::init();
 
-        // Create a mod registry for this runtime
-        register_mod_registry(handle.as_u64());
+        let kernel = RuntimeKernel::new();
+        let handle = RUNTIMES.insert(kernel);
 
         eprintln!(
             "[Morrow] Runtime initialized (ABI {abi_version:#010x}, handle={})",
@@ -71,7 +89,7 @@ pub extern "C" fn morrow_init(abi_version: u32) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_shutdown(runtime_handle: u64) -> u32 {
     panic::ffi_boundary(abi::RESULT_ERR_PANIC, || {
-        let handle = match abi::handles::Handle::from_u64(runtime_handle) {
+        let handle = match Handle::from_u64(runtime_handle) {
             Some(h) => h,
             None => {
                 eprintln!("[Morrow] morrow_shutdown: invalid handle 0");
@@ -79,7 +97,9 @@ pub extern "C" fn morrow_shutdown(runtime_handle: u64) -> u32 {
             }
         };
 
-        let mut kernel = match RUNTIMES.remove(handle) {
+        // Removing the kernel from the table drops it — all registries
+        // (mods, callbacks, config, quarantine, host API) are freed with it.
+        let kernel = match RUNTIMES.remove(handle) {
             Some(k) => k,
             None => {
                 eprintln!(
@@ -92,17 +112,21 @@ pub extern "C" fn morrow_shutdown(runtime_handle: u64) -> u32 {
 
         if let Err(state) = kernel.begin_shutdown() {
             eprintln!("[Morrow] morrow_shutdown: illegal state transition from {state}");
-            RUNTIMES.insert(kernel);
+            match std::sync::Arc::try_unwrap(kernel) {
+                Ok(k) => {
+                    RUNTIMES.insert(k);
+                }
+                Err(_) => {
+                    eprintln!("[Morrow] morrow_shutdown: kernel still referenced, cannot restore");
+                }
+            }
             return abi::RESULT_ERR_WRONG_STATE;
         }
 
-        // Unload all mods
-        if let Some(registry) = remove_mod_registry(handle.as_u64()) {
-            let count = registry.len();
-            if count > 0 {
-                eprintln!("[Morrow] Unloaded {count} mod(s)");
-            }
-            // registry drops here → libraries unloaded
+        // Unload all mods (drops their native libraries)
+        let mod_count = kernel.data().registry.len();
+        if mod_count > 0 {
+            eprintln!("[Morrow] Unloaded {mod_count} mod(s)");
         }
 
         if let Err(state) = kernel.finish_shutdown() {
@@ -136,12 +160,10 @@ pub extern "C" fn morrow_load_mod(
     path_len: u32,
 ) -> u32 {
     panic::ffi_boundary(abi::RESULT_ERR_PANIC, || {
-        let handle = match abi::handles::Handle::from_u64(runtime_handle) {
-            Some(h) => h,
-            None => return abi::RESULT_ERR_INVALID_HANDLE,
-        };
-
-        // Read path string from FFI
+        if path_ptr.is_null() {
+            eprintln!("[Morrow] morrow_load_mod: null path pointer");
+            return abi::RESULT_ERR_UNKNOWN;
+        }
         let path_bytes = unsafe {
             std::slice::from_raw_parts(path_ptr, path_len as usize)
         };
@@ -156,196 +178,339 @@ pub extern "C" fn morrow_load_mod(
         let package_path = Path::new(path_str);
         eprintln!("[Morrow] morrow_load_mod: {}", package_path.display());
 
-        // Look up the mod registry for this runtime handle.
-        match MOD_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
-            Some(registry) => {
-                let config_data = mod_loader::read_zip_config(package_path);
-                match mod_loader::load_package(package_path, registry) {
-                    Ok((name, exports)) => {
-                        // Store config if present
-                        if let Some(ref cfg) = config_data {
-                            if let Some(store) = CONFIG_STORES.lock().unwrap().get(&handle.as_u64()) {
-                                store.insert(&name, cfg.clone());
-                                eprintln!("[Morrow]   Config loaded ({} bytes)", cfg.len());
-                            }
-                        }
-                        if let Some(cb) = exports.tick_callback {
-                            if let Some(reg) = TICK_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
-                                reg.register(&name, cb);
-                                eprintln!("[Morrow]   Registered tick callback for '{name}'");
-                            }
-                        }
-                        if let Some(cb) = exports.server_start_callback {
-                            if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
-                                reg.server_start.insert(name.clone(), cb);
-                                eprintln!("[Morrow]   Registered server_start for '{name}'");
-                            }
-                        }
-                        if let Some(cb) = exports.server_stop_callback {
-                            if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get_mut(&handle.as_u64()) {
-                                reg.server_stop.insert(name.clone(), cb);
-                                eprintln!("[Morrow]   Registered server_stop for '{name}'");
-                            }
-                        }
-
-                        // Register event callbacks
-                        if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get_mut(&handle.as_u64()) {
-                            if let Some(cb) = exports.player_join_callback {
-                                cbs.player_join.insert(name.clone(), cb);
-                                eprintln!("[Morrow]   Registered player_join for '{name}'");
-                            }
-                            if let Some(cb) = exports.player_leave_callback {
-                                cbs.player_leave.insert(name.clone(), cb);
-                                eprintln!("[Morrow]   Registered player_leave for '{name}'");
-                            }
-                            if let Some(cb) = exports.chat_message_callback {
-                                cbs.chat_message.insert(name.clone(), cb);
-                                eprintln!("[Morrow]   Registered chat_message for '{name}'");
-                            }
-                            if let Some(cb) = exports.block_break_callback {
-                                cbs.block_break.insert(name.clone(), cb);
-                                eprintln!("[Morrow]   Registered block_break for '{name}'");
-                            }
-                            if let Some(cb) = exports.block_place_callback {
-                                cbs.block_place.insert(name.clone(), cb);
-                                eprintln!("[Morrow]   Registered block_place for '{name}'");
-                            }
-                            if let Some(cb) = exports.player_death_callback {
-                                cbs.player_death.insert(name.clone(), cb);
-                                eprintln!("[Morrow]   Registered player_death for '{name}'");
-                            }
-                        }
-
-                        eprintln!("[Morrow] Mod '{name}' loaded successfully");
-                        abi::RESULT_OK
-                    }
-                    Err(e) => {
-                        eprintln!("[Morrow] Failed to load mod: {e}");
-                        record_error(handle.as_u64(), format!("morrow_load_mod: {e}"));
-                        abi::RESULT_ERR_UNKNOWN
-                    }
-                }
-            }
+        let handle = match Handle::from_u64(runtime_handle) {
+            Some(h) => h,
             None => {
-                eprintln!("[Morrow] morrow_load_mod: no mod registry for runtime {handle:?}");
-                abi::RESULT_ERR_INVALID_HANDLE
+                eprintln!("[Morrow] morrow_load_mod: invalid runtime handle");
+                return abi::RESULT_ERR_INVALID_HANDLE;
             }
-        }
+        };
+
+        // Three phases so mod code never runs under a runtime lock:
+        //   A. lock held — parse manifest, check dependencies (registry read)
+        //   B. no locks   — extract, dlopen, call init (mod may re-enter API)
+        //   C. lock held — insert into registry, register callbacks
+        RUNTIMES
+            .with(handle, |kernel| {
+                // ── A: parse + dependency check (data lock held) ──
+                let prepared = {
+                    let data = kernel.data();
+                    match mod_loader::prepare_load(package_path, &data.registry) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("[Morrow] Failed to load mod: {e}");
+                            data.errors.push(format!("morrow_load_mod: {e}"));
+                            return abi::RESULT_ERR_UNKNOWN;
+                        }
+                    }
+                };
+                // Pure file IO — no lock needed.
+                let config_data = mod_loader::read_zip_config(package_path);
+
+                // ── B: load + init (no locks held) ──
+                let (loaded, exports, name) =
+                    match mod_loader::finish_load(&prepared) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("[Morrow] Failed to load mod: {e}");
+                            kernel.data().errors.push(format!("morrow_load_mod: {e}"));
+                            return abi::RESULT_ERR_UNKNOWN;
+                        }
+                    };
+
+                // ── C: register (data lock held) ──
+                let mut data = kernel.data();
+                data.registry.insert(name.clone(), loaded);
+                if let Some(cfg) = config_data {
+                    data.configs.insert(&name, cfg);
+                    eprintln!("[Morrow]   Config loaded");
+                }
+                if let Some(cb) = exports.tick_callback {
+                    data.tick.register(&name, cb);
+                    eprintln!("[Morrow]   Registered tick callback for '{name}'");
+                }
+                if let Some(cb) = exports.server_start_callback {
+                    data.lifecycle.server_start.insert(name.clone(), cb);
+                    eprintln!("[Morrow]   Registered server_start for '{name}'");
+                }
+                if let Some(cb) = exports.server_stop_callback {
+                    data.lifecycle.server_stop.insert(name.clone(), cb);
+                    eprintln!("[Morrow]   Registered server_stop for '{name}'");
+                }
+                if let Some(cb) = exports.player_join_callback {
+                    data.events.player_join.insert(name.clone(), cb);
+                    eprintln!("[Morrow]   Registered player_join for '{name}'");
+                }
+                if let Some(cb) = exports.player_leave_callback {
+                    data.events.player_leave.insert(name.clone(), cb);
+                    eprintln!("[Morrow]   Registered player_leave for '{name}'");
+                }
+                if let Some(cb) = exports.chat_message_callback {
+                    data.events.chat_message.insert(name.clone(), cb);
+                    eprintln!("[Morrow]   Registered chat_message for '{name}'");
+                }
+                if let Some(cb) = exports.block_break_callback {
+                    data.events.block_break.insert(name.clone(), cb);
+                    eprintln!("[Morrow]   Registered block_break for '{name}'");
+                }
+                if let Some(cb) = exports.block_place_callback {
+                    data.events.block_place.insert(name.clone(), cb);
+                    eprintln!("[Morrow]   Registered block_place for '{name}'");
+                }
+                if let Some(cb) = exports.player_death_callback {
+                    data.events.player_death.insert(name.clone(), cb);
+                    eprintln!("[Morrow]   Registered player_death for '{name}'");
+                }
+
+                eprintln!("[Morrow] Mod '{name}' loaded successfully");
+                abi::RESULT_OK
+            })
+            .unwrap_or_else(|| {
+                eprintln!("[Morrow] morrow_load_mod: no runtime for handle {runtime_handle}");
+                abi::RESULT_ERR_INVALID_HANDLE
+            })
     })
 }
 
 // ---------------------------------------------------------------------------
-// M4: Tick dispatch
+// M4: Tick dispatch (legacy single-event entry, used by Java bridge tests)
 // ---------------------------------------------------------------------------
 
 /// Drive one tick cycle — dispatches to all registered mod tick callbacks.
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_tick(runtime_handle: u64, tick_number: u64) {
     panic::ffi_boundary((), || {
-        let handle = match abi::handles::Handle::from_u64(runtime_handle) {
+        let handle = match Handle::from_u64(runtime_handle) {
             Some(h) => h,
             None => return,
         };
 
-        if let Some(registry) = TICK_REGISTRIES.lock().unwrap().get(&handle.as_u64()) {
-            let panicked = registry.dispatch(tick_number);
-            if !panicked.is_empty() {
-                // Quarantine panicking mods
-                if let Some(q) = QUARANTINES.lock().unwrap().get(&handle.as_u64()) {
-                    for name in &panicked {
-                        q.add(name);
-                        eprintln!("[Morrow] Mod '{name}' quarantined after panic");
+        // Collect callbacks under the lock, invoke after releasing it
+        // (mods may re-enter the runtime API from their callbacks).
+        let callbacks: Vec<(String, TickCallback)> = RUNTIMES
+            .with(handle, |k| k.data().tick.callbacks.clone().into_iter().collect())
+            .unwrap_or_default();
+
+        let panicked = run_tick_callbacks(&callbacks, tick_number);
+        quarantine_panicked(runtime_handle, &panicked);
+    })
+}
+
+/// Run tick callbacks, each panic-isolated. Returns names that panicked.
+fn run_tick_callbacks(callbacks: &[(String, TickCallback)], tick: u64) -> Vec<String> {
+    let mut panicked = Vec::new();
+    for (name, cb) in callbacks {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unsafe { cb(tick) };
+        }));
+        if result.is_err() {
+            eprintln!("[Morrow] Mod '{name}' panicked during tick {tick}");
+            panicked.push(name.clone());
+        }
+    }
+    panicked
+}
+
+/// Quarantine every mod that panicked this dispatch cycle.
+fn quarantine_panicked(runtime_handle: u64, panicked: &[String]) {
+    if panicked.is_empty() {
+        return;
+    }
+    with_runtime(runtime_handle, |kernel| {
+        let data = kernel.data();
+        for name in panicked {
+            data.quarantines.add(name);
+            eprintln!("[Morrow] Mod '{name}' quarantined after panic");
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Batch event dispatch (1 FFM call/tick) — the production path
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn morrow_dispatch_batch(
+    runtime_handle: u64,
+    data_ptr: *const u8,
+    data_len: u32,
+) {
+    panic::ffi_boundary((), || {
+        if data_ptr.is_null() || data_len < 4 {
+            return;
+        }
+        let data = unsafe { std::slice::from_raw_parts(data_ptr, data_len as usize) };
+
+        let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let mut pos: usize = 4;
+
+        // Snapshot the dispatch tables once, then run callbacks with no
+        // runtime lock held — mods may re-enter the API from callbacks
+        // without deadlocking.
+        let dispatch = with_runtime(runtime_handle, |kernel| {
+            let data = kernel.data();
+            (
+                data.tick.callbacks.clone(),
+                data.events.clone(),
+                data.quarantines.snapshot(),
+                data.host_api.clone(),
+            )
+        });
+        let (tick_cbs, event_cbs, quarantined, host_api) = match dispatch {
+            Some(d) => d,
+            None => return,
+        };
+
+        // Refresh the world snapshot once per tick (1 upcall, not N)
+        // and cache it on the kernel for the mod API (v0.14 PlayerSnapshot).
+        let mut snap_buf = [0u8; 4096];
+        let snapshot = host_api
+            .get_world_snapshot(&mut snap_buf)
+            .and_then(|n| WorldSnapshot::parse(&snap_buf[..n]));
+        if let Some(snap) = snapshot {
+            with_runtime(runtime_handle, |kernel| {
+                kernel.data().snapshot = Some(snap);
+            });
+        }
+
+        let mut panicked: Vec<String> = Vec::new();
+
+        for _ in 0..count {
+            if pos + 6 > data.len() {
+                break;
+            }
+            let etype = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+            let f1_len = u16::from_le_bytes([data[pos + 2], data[pos + 3]]) as usize;
+            let f2_len = u16::from_le_bytes([data[pos + 4], data[pos + 5]]) as usize;
+            pos += 6;
+
+            match etype {
+                0 => {
+                    // tick
+                    if pos + 8 <= data.len() {
+                        let tick = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
+                        pos += 8;
+                        for (name, cb) in &tick_cbs {
+                            if quarantined.contains(name) {
+                                continue;
+                            }
+                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                                cb(tick);
+                            }))
+                            .is_err()
+                            {
+                                eprintln!("[Morrow] Mod '{name}' panicked during tick {tick}");
+                                panicked.push(name.clone());
+                            }
+                        }
                     }
+                }
+                1 | 2 => {
+                    // join / leave
+                    if pos + f1_len <= data.len() {
+                        pos += f1_len;
+                        let map = if etype == 1 {
+                            &event_cbs.player_join
+                        } else {
+                            &event_cbs.player_leave
+                        };
+                        for (name, cb) in map {
+                            if quarantined.contains(name) {
+                                continue;
+                            }
+                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                                cb(data[pos - f1_len..pos].as_ptr(), f1_len as u32);
+                            }))
+                            .is_err()
+                            {
+                                panicked.push(name.clone());
+                            }
+                        }
+                    }
+                }
+                3 => {
+                    // chat
+                    if pos + f1_len + f2_len <= data.len() {
+                        let p_ptr = data[pos..pos + f1_len].as_ptr();
+                        let m_ptr = data[pos + f1_len..pos + f1_len + f2_len].as_ptr();
+                        pos += f1_len + f2_len;
+                        for (name, cb) in &event_cbs.chat_message {
+                            if quarantined.contains(name) {
+                                continue;
+                            }
+                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                                cb(p_ptr, f1_len as u32, m_ptr, f2_len as u32);
+                            }))
+                            .is_err()
+                            {
+                                panicked.push(name.clone());
+                            }
+                        }
+                    }
+                }
+                4 | 5 => {
+                    // block break/place
+                    if pos + f1_len + f2_len <= data.len() {
+                        let p_ptr = data[pos..pos + f1_len].as_ptr();
+                        let b_ptr = data[pos + f1_len..pos + f1_len + f2_len].as_ptr();
+                        pos += f1_len + f2_len;
+                        let map = if etype == 4 {
+                            &event_cbs.block_break
+                        } else {
+                            &event_cbs.block_place
+                        };
+                        for (name, cb) in map {
+                            if quarantined.contains(name) {
+                                continue;
+                            }
+                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                                cb(p_ptr, f1_len as u32, b_ptr, f2_len as u32);
+                            }))
+                            .is_err()
+                            {
+                                panicked.push(name.clone());
+                            }
+                        }
+                    }
+                }
+                6 => {
+                    // player death
+                    if pos + f1_len <= data.len() {
+                        pos += f1_len;
+                        for (name, cb) in &event_cbs.player_death {
+                            if quarantined.contains(name) {
+                                continue;
+                            }
+                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                                cb(
+                                    data[pos - f1_len..pos].as_ptr(),
+                                    f1_len as u32,
+                                    std::ptr::null(),
+                                    0u32,
+                                );
+                            }))
+                            .is_err()
+                            {
+                                panicked.push(name.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    pos += f1_len + f2_len; // skip unknown
                 }
             }
         }
+
+        // Quarantine every mod that panicked — batch path now matches
+        // the legacy single-event path.
+        quarantine_panicked(runtime_handle, &panicked);
     })
 }
 
 // ---------------------------------------------------------------------------
-// Per-runtime registries (mods + tick callbacks)
+// Host API (mod → Java upcalls)
 // ---------------------------------------------------------------------------
-
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
-use event::tick::TickRegistry;
-
-static MOD_REGISTRIES: LazyLock<Mutex<HashMap<u64, ModRegistry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-static TICK_REGISTRIES: LazyLock<Mutex<HashMap<u64, TickRegistry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-static LIFECYCLE_REGISTRIES: LazyLock<Mutex<HashMap<u64, LifecycleRegistry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-static ERROR_CHANNELS: LazyLock<Mutex<HashMap<u64, error::ErrorChannel>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub(crate) static HOST_APIS: LazyLock<Mutex<HashMap<u64, host_api::HostApi>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-static COMMAND_REGISTRIES: LazyLock<Mutex<HashMap<u64, host_api::CommandRegistry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-static QUARANTINES: LazyLock<Mutex<HashMap<u64, host_api::Quarantine>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-static CONFIG_STORES: LazyLock<Mutex<HashMap<u64, host_api::ConfigStore>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-static EVENT_CALLBACKS: LazyLock<Mutex<HashMap<u64, host_api::ModEventCallbacks>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Per-runtime lifecycle callbacks.
-pub struct LifecycleRegistry {
-    pub server_start: HashMap<String, unsafe extern "C" fn()>,
-    pub server_stop: HashMap<String, unsafe extern "C" fn()>,
-}
-
-fn register_mod_registry(handle: u64) {
-    MOD_REGISTRIES.lock().unwrap().insert(handle, ModRegistry::new());
-    TICK_REGISTRIES.lock().unwrap().insert(handle, TickRegistry::new());
-    LIFECYCLE_REGISTRIES.lock().unwrap().insert(handle, LifecycleRegistry {
-        server_start: HashMap::new(),
-        server_stop: HashMap::new(),
-    });
-    ERROR_CHANNELS.lock().unwrap().insert(handle, error::ErrorChannel::new());
-    HOST_APIS.lock().unwrap().insert(handle, host_api::HostApi::new());
-    COMMAND_REGISTRIES.lock().unwrap().insert(handle, host_api::CommandRegistry::new());
-    QUARANTINES.lock().unwrap().insert(handle, host_api::Quarantine::new());
-    CONFIG_STORES.lock().unwrap().insert(handle, host_api::ConfigStore::new());
-    EVENT_CALLBACKS.lock().unwrap().insert(handle, host_api::ModEventCallbacks {
-        player_join: HashMap::new(),
-        player_leave: HashMap::new(),
-        chat_message: HashMap::new(),
-        block_break: HashMap::new(),
-        block_place: HashMap::new(),
-        player_death: HashMap::new(),
-    });
-}
-
-fn remove_mod_registry(handle: u64) -> Option<ModRegistry> {
-    TICK_REGISTRIES.lock().unwrap().remove(&handle);
-    LIFECYCLE_REGISTRIES.lock().unwrap().remove(&handle);
-    ERROR_CHANNELS.lock().unwrap().remove(&handle);
-    MOD_REGISTRIES.lock().unwrap().remove(&handle)
-}
-
-/// Register the Java host function table (upcall stubs).
-#[unsafe(no_mangle)]
-pub extern "C" fn morrow_register_host_api(
-    runtime_handle: u64,
-    vtable_ptr: *const host_api::HostVtable,
-) {
-    panic::ffi_boundary((), || {
-        if vtable_ptr.is_null() { return; }
-        if let Some(api) = HOST_APIS.lock().unwrap().get(&runtime_handle) {
-            api.set_vtable(vtable_ptr);
-            eprintln!("[Morrow] Host API registered");
-        }
-    })
-}
 
 /// Get the online player count via Java upcall.
 ///
@@ -354,51 +519,13 @@ pub extern "C" fn morrow_register_host_api(
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_get_player_count(runtime_handle: u64) -> i32 {
     panic::ffi_boundary(-1, || {
-        let apis = HOST_APIS.lock().unwrap();
-        let api = if runtime_handle == 0 {
-            apis.values().next()
-        } else {
-            apis.get(&runtime_handle)
-        };
-        api.and_then(|a| a.get_player_count()).unwrap_or(-1)
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().host_api.get_player_count()
+        })
+        .flatten()
+        .unwrap_or(-1)
     })
 }
-
-/// Record an error for a runtime (used internally by lifecycle operations).
-fn record_error(handle: u64, msg: impl Into<String>) {
-    if let Some(ch) = ERROR_CHANNELS.lock().unwrap().get(&handle) {
-        ch.push(msg);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Diagnostics
-// ---------------------------------------------------------------------------
-
-#[unsafe(no_mangle)]
-pub extern "C" fn morrow_handle_count() -> u64 {
-    panic::ffi_boundary(0, || RUNTIMES.len() as u64)
-}
-
-/// Return the number of loaded mods across all runtimes.
-#[unsafe(no_mangle)]
-pub extern "C" fn morrow_mod_count() -> u64 {
-    panic::ffi_boundary(0, || {
-        MOD_REGISTRIES.lock().unwrap().values().map(|r| r.len()).sum::<usize>() as u64
-    })
-}
-
-/// Return the number of quarantined mods (panicked and isolated).
-#[unsafe(no_mangle)]
-pub extern "C" fn morrow_quarantined_count() -> u64 {
-    panic::ffi_boundary(0, || {
-        QUARANTINES.lock().unwrap().values().map(|q| q.count()).sum::<usize>() as u64
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Host API: send_message
-// ---------------------------------------------------------------------------
 
 /// Send a chat message via Java upcall.
 #[unsafe(no_mangle)]
@@ -408,25 +535,18 @@ pub extern "C" fn morrow_send_message(
     msg_len: u32,
 ) {
     panic::ffi_boundary((), || {
+        if msg_ptr.is_null() {
+            return;
+        }
         let msg = unsafe {
             let bytes = std::slice::from_raw_parts(msg_ptr, msg_len as usize);
             std::str::from_utf8(bytes).unwrap_or("<invalid utf8>")
         };
-        let apis = HOST_APIS.lock().unwrap();
-        let api = if runtime_handle == 0 {
-            apis.values().next()
-        } else {
-            apis.get(&runtime_handle)
-        };
-        if let Some(api) = api {
-            api.send_message(msg);
-        }
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().host_api.send_message(msg)
+        });
     })
 }
-
-// ---------------------------------------------------------------------------
-// Host API: get_player_list, execute_command, get_world_time
-// ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_get_player_list(
@@ -435,10 +555,15 @@ pub extern "C" fn morrow_get_player_list(
     buf_cap: u32,
 ) -> u32 {
     panic::ffi_boundary(0, || {
+        if buf.is_null() {
+            return 0;
+        }
         let buffer = unsafe { std::slice::from_raw_parts_mut(buf, buf_cap as usize) };
-        let apis = HOST_APIS.lock().unwrap();
-        let api = if runtime_handle == 0 { apis.values().next() } else { apis.get(&runtime_handle) };
-        api.and_then(|a| a.get_player_list(buffer)).unwrap_or(0) as u32
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().host_api.get_player_list(buffer)
+        })
+        .flatten()
+        .unwrap_or(0) as u32
     })
 }
 
@@ -449,24 +574,27 @@ pub extern "C" fn morrow_execute_command(
     cmd_len: u32,
 ) {
     panic::ffi_boundary((), || {
+        if cmd_ptr.is_null() {
+            return;
+        }
         let cmd = unsafe {
             let bytes = std::slice::from_raw_parts(cmd_ptr, cmd_len as usize);
             std::str::from_utf8(bytes).unwrap_or("")
         };
-        let apis = HOST_APIS.lock().unwrap();
-        let api = if runtime_handle == 0 { apis.values().next() } else { apis.get(&runtime_handle) };
-        if let Some(api) = api {
-            api.execute_command(cmd);
-        }
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().host_api.execute_command(cmd)
+        });
     })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_get_world_time(runtime_handle: u64) -> i64 {
     panic::ffi_boundary(-1, || {
-        let apis = HOST_APIS.lock().unwrap();
-        let api = if runtime_handle == 0 { apis.values().next() } else { apis.get(&runtime_handle) };
-        api.and_then(|a| a.get_world_time()).unwrap_or(-1)
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().host_api.get_world_time()
+        })
+        .flatten()
+        .unwrap_or(-1)
     })
 }
 
@@ -475,18 +603,19 @@ pub extern "C" fn morrow_get_world_time(runtime_handle: u64) -> i64 {
 // ---------------------------------------------------------------------------
 
 /// Built-in capabilities and their versions.
-static CAPABILITIES: LazyLock<HashMap<&'static str, u32>> = LazyLock::new(|| {
-    let mut m = HashMap::new();
-    m.insert("event_bus", 1u32);
-    m.insert("commands", 1u32);
-    m.insert("host_api", 1u32);
-    m.insert("config", 1u32);
-    m.insert("lifecycle", 1u32);
-    m.insert("player_events", 1u32);
-    m.insert("block_events", 1u32);
-    m.insert("panic_isolation", 1u32);
-    m
-});
+static CAPABILITIES: LazyLock<std::collections::HashMap<&'static str, u32>> =
+    LazyLock::new(|| {
+        let mut m = std::collections::HashMap::new();
+        m.insert("event_bus", 1u32);
+        m.insert("commands", 1u32);
+        m.insert("host_api", 1u32);
+        m.insert("config", 1u32);
+        m.insert("lifecycle", 1u32);
+        m.insert("player_events", 1u32);
+        m.insert("block_events", 1u32);
+        m.insert("panic_isolation", 1u32);
+        m
+    });
 
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_request_capability(
@@ -495,6 +624,9 @@ pub extern "C" fn morrow_request_capability(
     cap_len: u32,
 ) -> u32 {
     panic::ffi_boundary(0, || {
+        if cap_ptr.is_null() {
+            return 0;
+        }
         let cap = unsafe {
             let bytes = std::slice::from_raw_parts(cap_ptr, cap_len as usize);
             std::str::from_utf8(bytes).unwrap_or("")
@@ -507,25 +639,35 @@ pub extern "C" fn morrow_request_capability(
 // Mod logging
 // ---------------------------------------------------------------------------
 
+/// Level prefixes for `morrow_mod_log` (1=info, 2=warn, 3=error).
+fn level_prefix(level: u32) -> &'static str {
+    match level {
+        3 => "ERROR",
+        2 => "WARN",
+        _ => "INFO",
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_mod_log(
-    _runtime_handle: u64,
+    runtime_handle: u64,
     level: u32,
     msg_ptr: *const u8,
     msg_len: u32,
 ) {
     panic::ffi_boundary((), || {
+        if msg_ptr.is_null() {
+            return;
+        }
         let msg = unsafe {
             let bytes = std::slice::from_raw_parts(msg_ptr, msg_len as usize);
             std::str::from_utf8(bytes).unwrap_or("<invalid utf8>")
         };
-        eprintln!("{}", msg);
-        // Also forward to Java if available
-        if let Ok(apis) = HOST_APIS.lock() {
-            if let Some(api) = apis.values().next() {
-                api.log_message(level, msg);
-            }
-        }
+        eprintln!("[Morrow:{}] {}", level_prefix(level), msg);
+        // Also forward to Java with the level intact
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().host_api.log_message(level, msg)
+        });
     })
 }
 
@@ -536,136 +678,32 @@ pub extern "C" fn morrow_mod_log(
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_get_mod_config(
     runtime_handle: u64,
-    mod_name_ptr: *const u8, mod_name_len: u32,
-    buf: *mut u8, buf_cap: u32,
+    mod_name_ptr: *const u8,
+    mod_name_len: u32,
+    buf: *mut u8,
+    buf_cap: u32,
 ) -> u32 {
     panic::ffi_boundary(0, || {
+        if mod_name_ptr.is_null() || buf.is_null() {
+            return 0;
+        }
         let name = unsafe {
             let bytes = std::slice::from_raw_parts(mod_name_ptr, mod_name_len as usize);
             std::str::from_utf8(bytes).unwrap_or("")
         };
-        let stores = CONFIG_STORES.lock().unwrap();
-        let store = if runtime_handle == 0 { stores.values().next() } else { stores.get(&runtime_handle) };
-        if let Some(store) = store {
-            if let Some(data) = store.get(name) {
+        with_runtime(runtime_handle, |kernel| {
+            let store = kernel.data();
+            if let Some(data) = store.configs.get(name) {
                 let len = data.len().min(buf_cap as usize);
-                unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), buf, len); }
-                return len as u32;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), buf, len);
+                }
+                len as u32
+            } else {
+                0
             }
-        }
-        0
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Batch event dispatch (1 FFM call/tick)
-// ---------------------------------------------------------------------------
-
-#[unsafe(no_mangle)]
-pub extern "C" fn morrow_dispatch_batch(
-    runtime_handle: u64,
-    data_ptr: *const u8,
-    data_len: u32,
-) {
-    panic::ffi_boundary((), || {
-        let data = unsafe { std::slice::from_raw_parts(data_ptr, data_len as usize) };
-        if data.len() < 4 { return; }
-
-        let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        let mut pos: usize = 4;
-
-        let quarantined: HashSet<String> = QUARANTINES
-            .lock().unwrap().get(&runtime_handle)
-            .map(|q| q.quarantined.lock().unwrap().clone())
-            .unwrap_or_default();
-
-        // Sync world snapshot once (1 upcall, not N)
-        let mut snap_buf = [0u8; 4096];
-        let _snapshot = HOST_APIS.lock().unwrap()
-            .get(&runtime_handle)
-            .and_then(|api| api.get_world_snapshot(&mut snap_buf))
-            .and_then(|n| host_api::WorldSnapshot::parse(&snap_buf[..n]));
-
-        let tick_reg = TICK_REGISTRIES.lock().unwrap();
-        let tick_cbs = tick_reg.get(&runtime_handle);
-        let event_cbs = EVENT_CALLBACKS.lock().unwrap();
-        let cbs = event_cbs.get(&runtime_handle);
-        let lifecycle = LIFECYCLE_REGISTRIES.lock().unwrap();
-        let life = lifecycle.get(&runtime_handle);
-
-        for _ in 0..count {
-            if pos + 6 > data.len() { break; }
-            let etype = u16::from_le_bytes([data[pos], data[pos+1]]) as usize;
-            let f1_len = u16::from_le_bytes([data[pos+2], data[pos+3]]) as usize;
-            let f2_len = u16::from_le_bytes([data[pos+4], data[pos+5]]) as usize;
-            pos += 6;
-
-            match etype {
-                0 => { // tick
-                    if pos + 8 <= data.len() {
-                        let tick = u64::from_le_bytes(data[pos..pos+8].try_into().unwrap());
-                        pos += 8;
-                        if let Some(reg) = tick_cbs {
-                            for (name, cb) in &reg.callbacks {
-                                if quarantined.contains(name) { continue; }
-                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(tick); }));
-                            }
-                        }
-                    }
-                }
-                1 | 2 => { // join / leave
-                    if pos + f1_len <= data.len() {
-                        pos += f1_len;
-                        if let Some(cbs) = cbs {
-                            let map = if etype == 1 { &cbs.player_join } else { &cbs.player_leave };
-                            for (name, cb) in map {
-                                if quarantined.contains(name) { continue; }
-                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(data[pos-f1_len..pos].as_ptr(), f1_len as u32); }));
-                            }
-                        }
-                    }
-                }
-                3 => { // chat
-                    if pos + f1_len + f2_len <= data.len() {
-                        let p_ptr = data[pos..pos+f1_len].as_ptr();
-                        let m_ptr = data[pos+f1_len..pos+f1_len+f2_len].as_ptr();
-                        pos += f1_len + f2_len;
-                        if let Some(cbs) = cbs {
-                            for (name, cb) in &cbs.chat_message {
-                                if quarantined.contains(name) { continue; }
-                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(p_ptr, f1_len as u32, m_ptr, f2_len as u32); }));
-                            }
-                        }
-                    }
-                }
-                4 | 5 => { // block break/place
-                    if pos + f1_len + f2_len <= data.len() {
-                        let p_ptr = data[pos..pos+f1_len].as_ptr();
-                        let b_ptr = data[pos+f1_len..pos+f1_len+f2_len].as_ptr();
-                        pos += f1_len + f2_len;
-                        if let Some(cbs) = cbs {
-                            let map = if etype == 4 { &cbs.block_break } else { &cbs.block_place };
-                            for (name, cb) in map {
-                                if quarantined.contains(name) { continue; }
-                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(p_ptr, f1_len as u32, b_ptr, f2_len as u32); }));
-                            }
-                        }
-                    }
-                }
-                6 => { // player death
-                    if pos + f1_len <= data.len() {
-                        pos += f1_len;
-                        if let Some(cbs) = cbs {
-                            for (name, cb) in &cbs.player_death {
-                                if quarantined.contains(name) { continue; }
-                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { cb(data[pos-f1_len..pos].as_ptr(), f1_len as u32, std::ptr::null(), 0u32); }));
-                            }
-                        }
-                    }
-                }
-                _ => { pos += f1_len + f2_len; } // skip unknown
-            }
-        }
+        })
+        .unwrap_or(0)
     })
 }
 
@@ -682,20 +720,17 @@ pub extern "C" fn morrow_register_command(
     callback: host_api::CommandCallback,
 ) {
     panic::ffi_boundary((), || {
+        if name_ptr.is_null() {
+            return;
+        }
         let name = unsafe {
             let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
             std::str::from_utf8(bytes).unwrap_or("<invalid>")
         };
-        let registries = COMMAND_REGISTRIES.lock().unwrap();
-        let reg = if runtime_handle == 0 {
-            registries.values().next()
-        } else {
-            registries.get(&runtime_handle)
-        };
-        if let Some(reg) = reg {
-            reg.register(name, callback);
-            eprintln!("[Morrow] Command registered: /{name}");
-        }
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().commands.register(name, callback);
+        });
+        eprintln!("[Morrow] Command registered: /{name}");
     })
 }
 
@@ -710,6 +745,9 @@ pub extern "C" fn morrow_dispatch_command(
     args_len: u32,
 ) -> u32 {
     panic::ffi_boundary(0, || {
+        if name_ptr.is_null() {
+            return 0;
+        }
         let name = unsafe {
             let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
             std::str::from_utf8(bytes).unwrap_or("")
@@ -718,112 +756,97 @@ pub extern "C" fn morrow_dispatch_command(
             let bytes = std::slice::from_raw_parts(args_ptr, args_len as usize);
             std::str::from_utf8(bytes).unwrap_or("")
         };
-        if let Some(reg) = COMMAND_REGISTRIES.lock().unwrap().get(&runtime_handle) {
-            if reg.dispatch(name, args) { 1 } else { 0 }
-        } else {
-            0
-        }
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().commands.dispatch(name, args)
+        })
+        .map(|handled| if handled { 1 } else { 0 })
+        .unwrap_or(0)
     })
 }
 
 // ---------------------------------------------------------------------------
-// Event dispatch: BlockBreak, BlockPlace, PlayerDeath
-// ---------------------------------------------------------------------------
-
-macro_rules! dispatch_event {
-    ($name:ident, $field:ident, $arg:ident) => {
-        #[unsafe(no_mangle)]
-        pub extern "C" fn $name(runtime_handle: u64, ptr: *const u8, len: u32) {
-            panic::ffi_boundary((), || {
-                // Check which mods are quarantined (clone set to avoid holding lock)
-                let quarantined: std::collections::HashSet<String> = QUARANTINES
-                    .lock().unwrap().get(&runtime_handle)
-                    .map(|q| q.quarantined.lock().unwrap().clone())
-                    .unwrap_or_default();
-                if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
-                    for (mod_name, cb) in &cbs.$field {
-                        if quarantined.contains(mod_name) { continue; }
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                            cb(ptr, len);
-                        }));
-                        if result.is_err() {
-                            eprintln!("[Morrow] Mod '{mod_name}' panicked, quarantining");
-                            if let Some(q) = QUARANTINES.lock().unwrap().get(&runtime_handle) {
-                                q.add(mod_name);
-                            }
-                        }
-                    }
-                }
-            })
-        }
-    };
-    ($name:ident, $field:ident, $a1:ident, $a2:ident) => {
-        #[unsafe(no_mangle)]
-        pub extern "C" fn $name(
-            runtime_handle: u64, p1: *const u8, l1: u32, p2: *const u8, l2: u32,
-        ) {
-            panic::ffi_boundary((), || {
-                let quarantined: std::collections::HashSet<String> = QUARANTINES
-                    .lock().unwrap().get(&runtime_handle)
-                    .map(|q| q.quarantined.lock().unwrap().clone())
-                    .unwrap_or_default();
-                if let Some(cbs) = EVENT_CALLBACKS.lock().unwrap().get(&runtime_handle) {
-                    for (mod_name, cb) in &cbs.$field {
-                        if quarantined.contains(mod_name) { continue; }
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                            cb(p1, l1, p2, l2);
-                        }));
-                        if result.is_err() {
-                            eprintln!("[Morrow] Mod '{mod_name}' panicked, quarantining");
-                            if let Some(q) = QUARANTINES.lock().unwrap().get(&runtime_handle) {
-                                q.add(mod_name);
-                            }
-                        }
-                    }
-                }
-            })
-        }
-    };
-}
-
-dispatch_event!(morrow_dispatch_player_join, player_join, ptr);
-dispatch_event!(morrow_dispatch_player_leave, player_leave, ptr);
-dispatch_event!(morrow_dispatch_chat_message, chat_message, p1, p2);
-dispatch_event!(morrow_dispatch_block_break, block_break, p1, p2);
-dispatch_event!(morrow_dispatch_block_place, block_place, p1, p2);
-dispatch_event!(morrow_dispatch_player_death, player_death, p1, p2);
-
-// Events generated via dispatch_event! macro above
 // Lifecycle dispatch
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_dispatch_server_start(runtime_handle: u64) {
     panic::ffi_boundary((), || {
-        if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get(&runtime_handle) {
-            for (name, cb) in &reg.server_start {
+        with_runtime(runtime_handle, |kernel| {
+            let callbacks: Vec<(String, unsafe extern "C" fn())> =
+                kernel.data().lifecycle.server_start.clone().into_iter().collect();
+            for (name, cb) in &callbacks {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     unsafe { cb() };
                 }));
                 if let Err(p) = result {
-                    eprintln!("[Morrow] Mod '{name}' panicked in server_start: {:?}",
-                        p.downcast_ref::<&str>().unwrap_or(&"<unknown>"));
+                    eprintln!(
+                        "[Morrow] Mod '{name}' panicked in server_start: {:?}",
+                        p.downcast_ref::<&str>().unwrap_or(&"<unknown>")
+                    );
                 }
             }
-        }
+        });
     })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_dispatch_server_stop(runtime_handle: u64) {
     panic::ffi_boundary((), || {
-        if let Some(reg) = LIFECYCLE_REGISTRIES.lock().unwrap().get(&runtime_handle) {
-            for (_name, cb) in &reg.server_stop {
+        with_runtime(runtime_handle, |kernel| {
+            let callbacks: Vec<(String, unsafe extern "C" fn())> =
+                kernel.data().lifecycle.server_stop.clone().into_iter().collect();
+            for (_name, cb) in &callbacks {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     unsafe { cb() };
                 }));
             }
+        });
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn morrow_handle_count() -> u64 {
+    panic::ffi_boundary(0, || RUNTIMES.len() as u64)
+}
+
+/// Return the number of loaded mods across all runtimes.
+#[unsafe(no_mangle)]
+pub extern "C" fn morrow_mod_count() -> u64 {
+    panic::ffi_boundary(0, || {
+        RUNTIMES.fold(0u64, |acc, kernel| acc + kernel.data().registry.len() as u64)
+    })
+}
+
+/// Return the number of quarantined mods (panicked and isolated).
+#[unsafe(no_mangle)]
+pub extern "C" fn morrow_quarantined_count() -> u64 {
+    panic::ffi_boundary(0, || {
+        RUNTIMES.fold(0u64, |acc, kernel| acc + kernel.data().quarantines.count() as u64)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Host API registration (Java → Rust vtable)
+// ---------------------------------------------------------------------------
+
+/// Register the Java host function table (upcall stubs).
+#[unsafe(no_mangle)]
+pub extern "C" fn morrow_register_host_api(
+    runtime_handle: u64,
+    vtable_ptr: *const host_api::HostVtable,
+) {
+    panic::ffi_boundary((), || {
+        if vtable_ptr.is_null() {
+            return;
         }
+        with_runtime(runtime_handle, |kernel| {
+            kernel.data().host_api.set_vtable(vtable_ptr);
+        });
+        eprintln!("[Morrow] Host API registered");
     })
 }
 
@@ -835,12 +858,15 @@ pub extern "C" fn morrow_dispatch_server_stop(runtime_handle: u64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_last_error(runtime_handle: u64) -> u64 {
     panic::ffi_boundary(0, || {
-        ERROR_CHANNELS
-            .lock().unwrap()
-            .get(&runtime_handle)
-            .and_then(|ch| ch.peek())
-            .map(|e| e.id)
-            .unwrap_or(0)
+        with_runtime(runtime_handle, |kernel| {
+            kernel
+                .data()
+                .errors
+                .peek()
+                .map(|e| e.id)
+                .unwrap_or(0)
+        })
+        .unwrap_or(0)
     })
 }
 
@@ -856,25 +882,24 @@ pub extern "C" fn morrow_error_message(
     buffer_cap: u32,
 ) -> u32 {
     panic::ffi_boundary(0, || {
-        let channels = ERROR_CHANNELS.lock().unwrap();
-        let ch = match channels.get(&runtime_handle) {
-            Some(ch) => ch,
-            None => return 0,
-        };
-
-        let record = match ch.take(error_handle) {
-            Some(r) => r,
-            None => return 0,
-        };
-
-        let msg = record.message;
-        let bytes = msg.as_bytes();
-        let len = bytes.len().min(buffer_cap as usize);
-
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_ptr, len);
+        if buffer_ptr.is_null() {
+            return 0;
         }
+        with_runtime(runtime_handle, |kernel| {
+            let record = match kernel.data().errors.take(error_handle) {
+                Some(r) => r,
+                None => return 0,
+            };
 
-        len as u32
+            let bytes = record.message.as_bytes();
+            let len = bytes.len().min(buffer_cap as usize);
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_ptr, len);
+            }
+
+            len as u32
+        })
+        .unwrap_or(0)
     })
 }

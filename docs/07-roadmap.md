@@ -168,18 +168,18 @@ Benchmark:
 
 **预计时间：** 1-2 周
 **依赖：** M4
-**状态：** ⬜ Planned
+**状态：** ✅ Done (2026-08)
 
 ### 任务清单
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 5.1 | 实现 `#[morrow::mod_main]` proc macro | ⬜ |
-| 5.2 | 实现 Context API（event_bus, commands, config） | ⬜ |
-| 5.3 | 实现日志宏（morrow::info!/warn!/error!） | ⬜ |
-| 5.4 | 实现事件监听注册糖 | ⬜ |
-| 5.5 | 编写 SDK 文档 | ⬜ |
-| 5.6 | 编写快速入门指南 | ⬜ |
+| 5.1 | 实现 `#[morrow::mod_main]` proc macro | ✅ |
+| 5.2 | 实现 Context API（commands, config, host 调用封装） | ✅ |
+| 5.3 | 实现日志宏（morrow::info!/warn!/error!，走 host log） | ✅ |
+| 5.4 | 实现事件监听注册糖（`#[morrow::event(kind)]`） | ✅ |
+| 5.5 | 编写 SDK 文档 | ✅ |
+| 5.6 | 编写快速入门指南（docs/04-sdk-api.md） | ✅ |
 
 ### 验收标准
 
@@ -193,6 +193,12 @@ fn init(ctx: &mut Context) -> Result<(), MorrowError> {
     Ok(())
 }
 ```
+
+实现说明:事件注册糖采用 attribute 宏(`#[morrow::event(kind)]` +
+普通签名 handler)而非注册式 EventBus — 与符号发现 ABI 匹配;EventBus
+(优先级、Arc)留在 v2 规划。额外修复:init panic 穿过 FFI 边界
+(catch_unwind 包裹)、`player_death` null cause 的 `read_str` UB、
+生产镜像缺 chat-bot.morrow。
 
 ---
 

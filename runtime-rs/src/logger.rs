@@ -20,12 +20,11 @@ impl Log for MorrowLogger {
         // Always print to stderr (Minecraft captures this as [STDOUT])
         eprintln!("{}", msg);
 
-        // Also forward to Java via HostApi if available
-        if let Ok(apis) = crate::HOST_APIS.lock() {
-            if let Some(api) = apis.values().next() {
-                api.log_message(level_code, &msg);
-            }
-        }
+        // Also forward to Java via the first live runtime's host API
+        // (log is not a hot path — a quick scan is fine).
+        crate::with_runtime(0, |kernel| {
+            kernel.data().host_api.log_message(level_code, &msg);
+        });
     }
 
     fn flush(&self) {}

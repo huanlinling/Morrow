@@ -22,7 +22,8 @@ import java.nio.charset.StandardCharsets;
  */
 public class EventBuffer {
     private static final int INITIAL_CAPACITY = 4096;
-    private final ByteBuffer buf = ByteBuffer.allocate(INITIAL_CAPACITY)
+    // Not final: ensure() swaps in a larger buffer when capacity is exhausted.
+    private ByteBuffer buf = ByteBuffer.allocate(INITIAL_CAPACITY)
             .order(ByteOrder.LITTLE_ENDIAN);
     private int count;
 
@@ -112,20 +113,24 @@ public class EventBuffer {
         return buf;
     }
 
+    /** Reset for the next tick batch. Call after finish() is consumed. */
+    public void reset() {
+        count = 0;
+        buf.clear();
+        buf.position(4); // reserve u32 count slot again
+    }
+
     public boolean isEmpty() { return count == 0; }
 
     private void ensure(int extra) {
         if (buf.remaining() < extra) {
-            // Grow: double capacity
-            int newCap = buf.capacity() * 2;
+            // Grow: double capacity (previous code copied back into the
+            // same-size buffer, so it never actually grew)
+            int newCap = Math.max(buf.capacity() * 2, buf.capacity() + extra);
             ByteBuffer bigger = ByteBuffer.allocate(newCap).order(ByteOrder.LITTLE_ENDIAN);
             buf.flip();
             bigger.put(buf);
-            buf.clear();
-            // Copy back
-            bigger.flip();
-            buf.clear();
-            buf.put(bigger);
+            buf = bigger;
         }
     }
 }

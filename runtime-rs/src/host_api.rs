@@ -76,6 +76,7 @@ type LogMessageFn = unsafe extern "C" fn(u32, *const u8, u32);
 type GetWorldSnapshotFn = unsafe extern "C" fn(*mut u8, u32) -> u32;
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct HostVtable {
     pub get_player_count: Option<GetPlayerCountFn>,
     pub send_message: Option<SendMessageFn>,
@@ -88,6 +89,14 @@ pub struct HostVtable {
 
 pub struct HostApi {
     vtable: Mutex<Option<HostVtable>>,
+}
+
+impl Clone for HostApi {
+    fn clone(&self) -> Self {
+        HostApi {
+            vtable: Mutex::new(self.vtable.lock().unwrap().clone()),
+        }
+    }
 }
 
 impl HostApi {
@@ -163,6 +172,9 @@ impl HostApi {
 // ---------------------------------------------------------------------------
 
 /// Cached world state, refreshed once per tick via a single upcall.
+// Fields read by mod-facing APIs in later milestones.
+#[derive(Clone)]
+#[allow(dead_code)]
 pub struct WorldSnapshot {
     pub player_count: u32,
     pub world_time: i64,
@@ -218,6 +230,7 @@ impl Default for CommandRegistry { fn default() -> Self { Self::new() } }
 pub type PlayerEventCallback = unsafe extern "C" fn(*const u8, u32);
 pub type TwoStrEventCallback = unsafe extern "C" fn(*const u8, u32, *const u8, u32);
 
+#[derive(Clone)]
 pub struct ModEventCallbacks {
     pub player_join: HashMap<String, PlayerEventCallback>,
     pub player_leave: HashMap<String, PlayerEventCallback>,
@@ -225,6 +238,25 @@ pub struct ModEventCallbacks {
     pub block_break: HashMap<String, TwoStrEventCallback>,
     pub block_place: HashMap<String, TwoStrEventCallback>,
     pub player_death: HashMap<String, TwoStrEventCallback>,
+}
+
+impl ModEventCallbacks {
+    pub fn new() -> Self {
+        ModEventCallbacks {
+            player_join: HashMap::new(),
+            player_leave: HashMap::new(),
+            chat_message: HashMap::new(),
+            block_break: HashMap::new(),
+            block_place: HashMap::new(),
+            player_death: HashMap::new(),
+        }
+    }
+}
+
+impl Default for ModEventCallbacks {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,8 +270,11 @@ pub struct Quarantine {
 impl Quarantine {
     pub fn new() -> Self { Quarantine { quarantined: Mutex::new(HashSet::new()) } }
     pub fn add(&self, name: &str) { self.quarantined.lock().unwrap().insert(name.to_string()); }
+    #[allow(dead_code)] // used by mod-facing quarantine queries (M3+)
     pub fn is_quarantined(&self, name: &str) -> bool { self.quarantined.lock().unwrap().contains(name) }
     pub fn count(&self) -> usize { self.quarantined.lock().unwrap().len() }
+    /// Snapshot of currently quarantined mods.
+    pub fn snapshot(&self) -> HashSet<String> { self.quarantined.lock().unwrap().clone() }
 }
 
 impl Default for Quarantine { fn default() -> Self { Self::new() } }

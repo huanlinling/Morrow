@@ -26,7 +26,6 @@ public class MorrowMod {
 
     private static PanamaBridge bridge;
     private static long runtimeHandle;
-    private static MethodHandle morrowTick;
     private static MinecraftServer server;
     private static boolean initialized;
 
@@ -117,6 +116,7 @@ public class MorrowMod {
             seg.copyFrom(MemorySegment.ofBuffer(buf));
             dispatchBatch.invokeExact(runtimeHandle, seg, buf.remaining());
         } catch (Throwable e) { LOG.error("batch: {}", e.getMessage()); }
+        finally { eventBuffer.reset(); } // always start the next tick clean
     }
 
     // ─── Shutdown (called from Mixin) ────────────

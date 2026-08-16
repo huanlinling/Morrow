@@ -8,5 +8,4 @@ description = "The simplest possible Morrow mod"
 crate-type = ["cdylib"]
 
 [dependencies]
-log = "0.4.33"
 morrow = { path = "../../sdk-rs" }

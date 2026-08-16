@@ -1,280 +1,171 @@
-# 04 — Rust SDK API 设计
+# 04 — Rust SDK 使用指南
 
-## 设计目标
+SDK 是对 runtime ABI 的高层封装:开发者写普通 Rust,不写 FFI、不碰
+裸指针。每个 mod 是一个独立 cdylib crate,依赖 `morrow`:
 
-SDK 是对 Runtime Core ABI 的高层封装，目标：
+```toml
+[lib]
+crate-type = ["cdylib"]
 
-1. **Ergonomic** — 开发者写 Rust，不写 FFI
-2. **Safe** — 编译期尽可能多检查，运行时 catch_unwind
-3. **Zero-cost abstraction** — 高层 API 编译后无额外开销
-4. **Familiar** — 借鉴 Bevy ECS、Actix 等成熟 Rust 框架的 API 风格
-
-## Mod 入口
-
-### 最小 Mod
-
-```rust
-use morrow::prelude::*;
-
-// 定义 mod 结构体
-struct MyMod {
-    tick_count: u64,
-}
-
-// 实现 Mod 接口
-impl MorrowMod for MyMod {
-    fn metadata(&self) -> ModMetadata {
-        ModMetadata::new("my-mod", "0.1.0")
-            .description("My first Morrow mod")
-            .author("dev")
-    }
-
-    fn on_init(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
-        morrow::info!("MyMod initialized!");
-        Ok(())
-    }
-
-    fn on_tick(&mut self, ctx: &mut Context, tick: u64) -> Result<(), MorrowError> {
-        self.tick_count += 1;
-        if tick % 20 == 0 {
-            morrow::info!("Second passed! Tick: {}", tick);
-        }
-        Ok(())
-    }
-}
-
-// 导出为动态库入口
-morrow::export_mod!(MyMod);
+[dependencies]
+morrow = { path = "../../sdk-rs" }
 ```
 
-### Proc Macro 版本（Milestone 5）
+## 最小 Mod
 
 ```rust
 use morrow::prelude::*;
 
 #[morrow::mod_main]
 fn init(ctx: &mut Context) -> Result<(), MorrowError> {
-    ctx.on_tick(|tick| {
-        if tick % 20 == 0 {
-            morrow::info!("Tick: {}", tick);
-        }
-    });
+    ctx.register_command("ping", ping);
+    Ok(())
+}
 
-    ctx.on_server_start(|_| {
-        morrow::info!("Server started!");
-    });
+fn ping(_args: &str) {
+    morrow::send_message("Pong!");
+}
+```
 
+打包后(`make package-hello` 或 `scripts/package-mod.sh <mod-dir>`),
+runtime 会 dlopen 该库并调用生成的 `morrow_mod_init`。
+
+## `#[morrow::mod_main]`
+
+标记 mod 入口函数。支持两种签名:
+
+| 签名 | 说明 |
+|------|------|
+| `fn(&mut Context) -> Result<(), MorrowError>` | 推荐 |
+| `fn(&mut Context, *const RuntimeApi) -> Result<(), MorrowError>` | 旧式,透传原始 vtable |
+
+宏生成 `extern "C" fn morrow_mod_init(*const RuntimeApi) -> u32`
+(返回 0=成功, 1=失败),并:
+
+1. 把 runtime API 存入 thread-local(供事件 handler 与日志宏使用)
+2. 构造 `Context` 传入用户函数
+3. 用 `catch_unwind` 包裹用户函数 — init 中 panic 不会穿过 FFI
+   边界 abort,而是记录 `Init panicked: <msg>` 并以失败码返回
+
+返回类型必须是 `Result<_, _>`;参数个数/类型不符时产生编译错误。
+
+## 事件:`#[morrow::event(kind)]`
+
+| kind | 导出符号 | Handler 签名 |
+|------|----------|--------------|
+| `tick` | `morrow_mod_tick` | `fn(u64)` |
+| `server_start` | `morrow_mod_server_start` | `fn()` |
+| `server_stop` | `morrow_mod_server_stop` | `fn()` |
+| `player_join` / `player_leave` | `morrow_mod_player_join` / `_leave` | `fn(&str)` |
+| `chat_message` / `block_break` / `block_place` / `player_death` | `morrow_mod_<kind>` | `fn(&str, &str)` |
+
+```rust
+#[morrow::event(chat_message)]
+fn on_chat(player: &str, msg: &str) {
+    morrow::info!("<{}> {}", player, msg);
+}
+
+#[morrow::event(tick)]
+fn on_tick(t: u64) {
+    if t % 200 == 0 {
+        morrow::info!("tick {}", t);
+    }
+}
+```
+
+- Handler 保持普通 Rust 签名;宏生成 `#[unsafe(no_mangle)] extern "C"`
+  导出,内部用 `read_str` 零拷贝解包。
+- 参数个数/类型不匹配会得到带位置的编译错误。
+- **每 mod 每 kind 至多一个 handler** — ABI 是符号发现制,重复
+  kind 会以 duplicate symbol 链接错误暴露。
+- 事件派发在 Minecraft server 主线程,与 init 同一线程。
+
+## Context
+
+`Context` 是 `Copy` 的,需要持有时(如事件 handler 中调用 API)可在
+init 里拷贝存入静态变量:
+
+```rust
+static CTX: OnceLock<Context> = OnceLock::new();
+
+#[morrow::mod_main]
+fn init(ctx: &mut Context) -> Result<(), MorrowError> {
+    CTX.set(*ctx).unwrap();
     Ok(())
 }
 ```
 
-## Context API
+不要手动构造 `Context` — api 指针必须来自宏生成的 init。
 
-`Context` 是 Mod 与 Runtime 交互的唯一入口：
+| 方法 | 返回 | 说明 |
+|------|------|------|
+| `send_message(&str)` | — | 全体玩家聊天广播 |
+| `execute_command(&str)` | — | 执行服务端命令 |
+| `player_count()` | `i32` | 在线人数;host API 未注册时为 -1 |
+| `player_list()` | `Vec<String>` | 在线玩家名 |
+| `world_time()` | `i64` | 世界时间(ticks);未注册时为 -1 |
+| `register_command(name, fn(&str))` | — | 注册聊天命令;槽位池满(64/每 mod)时 panic,被 init 的 catch_unwind 接住 |
+| `config()` | `Option<String>` | 本 mod 的 config.toml 原文(≤4096 字节) |
+| `request_capability(&str)` | `u32` | 能力版本;0 = 不可用 |
+| `log(LogLevel, &str)` | — | 经 host 转发到 Minecraft log4j |
+
+## 事件内的全局函数
+
+事件 handler 里可以直接用 crate 根自由函数(内部读 thread-local,
+init 后恒可用;未设置时消息调用 no-op、查询返回默认值):
 
 ```rust
-pub struct Context {
-    /// Capability 注册表
-    capabilities: CapabilityRegistry,
-
-    /// Event bus 引用
-    event_bus: Option<Arc<EventBus>>,
-
-    /// 当前 mod 的 metadata
-    mod_meta: ModMetadata,
-
-    /// Runtime 配置
-    config: RuntimeConfig,
-}
-
-impl Context {
-    /// 获取 capability（类型安全）
-    pub fn capability<T: Capability>(&self) -> Result<&T, CapabilityError>;
-
-    /// 获取 event bus
-    pub fn event_bus(&self) -> Result<&EventBus, CapabilityError>;
-
-    /// 获取命令注册表
-    pub fn commands(&self) -> Result<&CommandRegistry, CapabilityError>;
-
-    /// 读取配置
-    pub fn config(&self) -> &RuntimeConfig;
-
-    /// 获取其他已加载 mod 的信息
-    pub fn mods(&self) -> Vec<ModInfo>;
-
-    /// 记录日志（Java 侧 log4j 集成）
-    pub fn log(&self, level: LogLevel, message: &str);
-}
+morrow::send_message("...");
+morrow::execute_command("say hi");
+morrow::player_count();   // -1 未注册
+morrow::player_list();    // Vec<String>
+morrow::world_time();     // -1 未注册
+morrow::config();         // Option<String>
+morrow::log(LogLevel::Warn, "...");
 ```
 
-## Event API
+## 日志宏
 
 ```rust
-/// 事件侦听器
-pub struct EventListener<E: Event> {
-    priority: EventPriority,
-    handler: Box<dyn Fn(&E) + Send + Sync>,
-}
-
-/// Event trait — 所有事件实现此 trait
-pub trait Event: Send + Sync + 'static {
-    /// 事件类型标识符
-    fn event_type() -> &'static str;
-}
-
-// ── 内置事件 ──
-
-/// 服务端 tick
-pub struct ServerTick {
-    pub tick_number: u64,
-}
-
-impl Event for ServerTick {
-    fn event_type() -> &'static str { "server.tick" }
-}
-
-/// 玩家加入
-pub struct PlayerJoin {
-    pub player_name: String,
-    pub player_uuid: String,
-}
-
-impl Event for PlayerJoin {
-    fn event_type() -> &'static str { "player.join" }
-}
-
-/// 玩家离开
-pub struct PlayerLeave {
-    pub player_name: String,
-    pub player_uuid: String,
-}
-
-impl Event for PlayerLeave {
-    fn event_type() -> &'static str { "player.leave" }
-}
-```
-
-### 注册事件
-
-```rust
-impl EventBus {
-    /// 注册事件监听器
-    pub fn on<E: Event>(
-        &self,
-        handler: impl Fn(&E) + Send + Sync + 'static,
-    ) -> EventListenerHandle;
-
-    /// 带优先级
-    pub fn on_with_priority<E: Event>(
-        &self,
-        priority: EventPriority,
-        handler: impl Fn(&E) + Send + Sync + 'static,
-    ) -> EventListenerHandle;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EventPriority {
-    Lowest  = 0,
-    Low     = 25,
-    Normal  = 50,
-    High    = 75,
-    Highest = 100,
-    Monitor = 200, // 最后运行，用于日志/监控，不可修改事件
-}
-```
-
-## Command API (v2 preview)
-
-```rust
-impl CommandRegistry {
-    /// 注册一个命令
-    pub fn register(
-        &self,
-        name: &str,
-        description: &str,
-        handler: impl Fn(CommandContext) -> Result<(), CommandError> + Send + Sync + 'static,
-    ) -> Result<(), CommandError>;
-}
-
-pub struct CommandContext {
-    pub sender: CommandSender,
-    pub args: Vec<String>,
-}
-```
-
-## 日志 API
-
-```rust
-// 宏形式
 morrow::info!("Player {} joined", name);
-morrow::warn!("Low memory: {}MB remaining", mb);
-morrow::error!("Failed to save: {}", err);
-morrow::debug!("Position: {:?}", pos);
-morrow::trace!("Event dispatch took {}ns", ns);
-
-// 会路由到 Java 侧的 log4j，与 Minecraft 日志统一
+morrow::warn!("Low memory: {}MB", mb);
+morrow::error!("Failed: {}", err);
 ```
 
-## 配置 API
+- 走 host 日志通道(level 1/2/3),最终进 Minecraft 日志;
+  init 之前调用则 fallback 到 stderr。
+- 自动加 `[mod-name]` 前缀。
+- **必须用显式参数** — 宏展开的 `format!` 不支持隐式捕获,
+  `info!("{name}")` 会编译报错,请写 `info!("{}", name)`。
 
-```rust
-// mod 可以在 manifest.toml 中声明默认配置
-// 运行时 Java 侧会读取并传递给 Rust
+## 配置
 
-#[derive(Deserialize)]
-struct MyConfig {
-    greeting: String,
-    max_entities: u32,
-}
+- 打包时把 `config.toml` 放进 mod 目录即随 `.morrow` 包分发。
+- 读取按 **cargo 包名**(`CARGO_PKG_NAME`)键控 — 需与
+  `manifest.toml` 的 `[package] name` 一致。
+- `ctx.config()` / `morrow::config()` 返回原始 TOML 文本(≤4096
+  字节),可按需自行解析(示例 `motd` 演示了手工解析 key=value)。
 
-fn on_init(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
-    let config: MyConfig = ctx.config_for("my-mod")?;
-    morrow::info!("{}", config.greeting);
-    Ok(())
-}
-```
+## 命令
 
-## SDK 包结构
+- `ctx.register_command(name, handler)`,handler 收到参数串(可为空)。
+- 底层 ABI 回调无 userdata,SDK 用预生成的 64 个 trampoline 槽位
+  把命令名映射到 handler —— **每 mod 最多 64 个命令**。
+- 池满时 `register_command` panic → init 的 catch_unwind 接住 →
+  mod 以 `Init panicked: ...` 干净失败。
 
-```
-sdk-rs/
-├── Cargo.toml
-│   [dependencies]
-│   morrow-macros = { path = "../morrow-macros" }
-│   serde = { version = "1", features = ["derive"] }
-│   serde_json = "1"
-│   log = "0.4"
-│
-├── src/
-│   ├── lib.rs            # pub mod prelude; re-exports
-│   ├── prelude.rs        # 常用类型集中导入
-│   ├── mod_trait.rs      # MorrowMod trait + derive
-│   ├── context.rs        # Context 实现
-│   ├── event.rs          # Event, EventBus, EventPriority
-│   ├── command.rs        # CommandRegistry, CommandContext
-│   ├── log.rs            # 日志宏
-│   ├── config.rs         # 配置读取
-│   └── error.rs          # MorrowError 类型
-│
-├── morrow-macros/
-│   ├── Cargo.toml
-│   │   [lib]
-│   │   proc-macro = true
-│   │   [dependencies]
-│   │   syn = "2"
-│   │   quote = "1"
-│   │   proc-macro2 = "1"
-│   │
-│   └── src/
-│       ├── lib.rs         # proc macro 入口
-│       └── mod_main.rs    # #[morrow::mod_main] 实现
-```
+## ABI 约束(开发者须知)
 
-## SDK 设计原则
+- 事件分发是**符号发现制**:runtime 在 dlopen 后按固定符号名+签名
+  查找,宏负责生成正确符号。手写导出时请对照上表。
+- API 调用一律传 handle `0`(= "any live runtime")。
+- `morrow_mod_init` 的符号签名 `extern "C" fn(*const RuntimeApi) -> u32`
+  不可变(runtime 按此签名加载)。
 
-1. **trait 优于 macro** — 核心接口用 trait，macro 仅做糖
-2. **显式优于隐式** — 所有 capability 显式获取，不做全局注入
-3. **编译期检查优于运行时** — 类型安全的事件系统，handler 签名编译期匹配
-4. **性能透明** — Context 方法调用开销可知（参考文档标注）
-5. **渐进式抽象** — 可以用 proc macro 快速开发，也可以手写 trait 精细控制
+## 示例
+
+| 示例 | 演示 |
+|------|------|
+| `examples/hello-morrow` | 全 API 演示:config、capability、命令、9 种事件 |
+| `examples/chat-bot` | 聊天回应 + `/ping`,player_join 欢迎 |
+| `examples/motd` | config.toml 读取 + 进服欢迎 + `/motd` 命令 |

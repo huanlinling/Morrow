@@ -1,7 +1,7 @@
 //! # Morrow SDK
 //!
 //! Write Minecraft mods in Rust. Morrow compiles your code to a native
-//! library, loaded by the Fabric host adapter via Panama FFI.
+//! library, loaded by the host runtime via Panama FFI.
 //!
 //! ## Quick Start
 //!
@@ -9,43 +9,42 @@
 //! use morrow::prelude::*;
 //!
 //! #[morrow::mod_main]
-//! fn init(ctx: &mut Context, api: *const RuntimeApi) -> Result<(), MorrowError> {
-//!     morrow::info!("Hello from Rust!");
+//! fn init(ctx: &mut Context) -> Result<(), MorrowError> {
+//!     ctx.register_command("ping", ping);
 //!     Ok(())
+//! }
+//!
+//! fn ping(_args: &str) {
+//!     morrow::send_message("Pong!");
+//! }
+//!
+//! #[morrow::event(player_join)]
+//! fn on_join(player: &str) {
+//!     morrow::send_message(&format!("Welcome, {player}!"));
 //! }
 //! ```
 //!
-//! ## RuntimeApi
+//! ## Events
 //!
-//! The [`RuntimeApi`] vtable provides access to game state:
+//! | Attribute | Called when | Handler signature |
+//! |-----------|-------------|-------------------|
+//! | `#[morrow::event(tick)]` | Every game tick (20 TPS) | `fn(u64)` |
+//! | `#[morrow::event(server_start)]` | Server finished starting | `fn()` |
+//! | `#[morrow::event(server_stop)]` | Server begins stopping | `fn()` |
+//! | `#[morrow::event(player_join)]` | Player joins | `fn(&str)` |
+//! | `#[morrow::event(player_leave)]` | Player leaves | `fn(&str)` |
+//! | `#[morrow::event(chat_message)]` | Chat message sent | `fn(&str, &str)` |
+//! | `#[morrow::event(block_break)]` | Block broken | `fn(&str, &str)` |
+//! | `#[morrow::event(block_place)]` | Block placed | `fn(&str, &str)` |
+//! | `#[morrow::event(player_death)]` | Player dies | `fn(&str, &str)` |
 //!
-//! | Function | Returns | Description |
-//! |----------|---------|-------------|
-//! | `get_player_count(handle)` | i32 | Online player count |
-//! | `get_player_list(handle, buf, cap)` | u32 | Comma-separated player names |
-//! | `send_message(handle, ptr, len)` | — | Broadcast to chat |
-//! | `execute_command(handle, ptr, len)` | — | Run server command |
-//! | `get_world_time(handle)` | i64 | World time in ticks |
-//! | `register_command(handle, name, len, cb)` | — | Register `/` command |
-//! | `get_config(handle, name, len, buf, cap)` | u32 | Read config.toml |
-//! | `request_capability(handle, cap, len)` | u32 | Check feature availability |
+//! ## Global API (usable inside event handlers)
 //!
-//! ## Optional Exports
-//!
-//! Export any of these functions to receive events:
-//!
-//! | Export | Signature | Called when |
-//! |--------|-----------|-------------|
-//! | `morrow_mod_tick` | `fn(u64)` | Every game tick (20 TPS) |
-//! | `morrow_mod_server_start` | `fn()` | Server finished starting |
-//! | `morrow_mod_server_stop` | `fn()` | Server begins stopping |
-//! | `morrow_mod_player_join` | `fn(*const u8, u32)` | Player joins |
-//! | `morrow_mod_player_leave` | `fn(*const u8, u32)` | Player leaves |
-//! | `morrow_mod_chat_message` | `fn(*const u8, u32, *const u8, u32)` | Chat message sent |
-//! | `morrow_mod_block_break` | `fn(*const u8, u32, *const u8, u32)` | Block broken |
-//! | `morrow_mod_block_place` | `fn(*const u8, u32, *const u8, u32)` | Block placed |
-//! | `morrow_mod_player_death` | `fn(*const u8, u32, *const u8, u32)` | Player dies |
+//! [`send_message`], [`execute_command`], [`player_count`], [`player_list`],
+//! [`world_time`], [`config`], [`log`] — thin wrappers over the runtime API,
+//! reading the current runtime from a thread-local set during init.
 
+pub mod __internal;
 pub mod context;
 pub mod error;
 pub mod runtime_api;
@@ -53,20 +52,101 @@ pub mod runtime_api;
 // ─── Zero-copy helpers ─────────────────────────
 
 /// Read a `&str` from FFI pointer + length. Zero-copy — borrows the
-/// original buffer. Falls back to `"<invalid>"` on bad UTF-8.
+/// original buffer. Falls back to `"<invalid>"` on bad UTF-8 and to `""`
+/// on null pointers (e.g. `player_death`'s cause).
 ///
 /// Use this in event callbacks instead of `String::from_utf8_lossy`
 /// to avoid allocation.
 #[inline]
 pub fn read_str<'a>(ptr: *const u8, len: u32) -> &'a str {
+    if ptr.is_null() {
+        return "";
+    }
     unsafe {
         let bytes = std::slice::from_raw_parts(ptr, len as usize);
         std::str::from_utf8(bytes).unwrap_or("<invalid utf-8>")
     }
 }
 
-// Re-export the proc macro
-pub use morrow_macros::mod_main;
+/// Parse a comma-separated player list (host `get_player_list` format)
+/// into names, skipping empties.
+pub(crate) fn parse_player_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .filter(|p| !p.is_empty())
+        .map(|p| p.to_string())
+        .collect()
+}
+
+// ─── Log levels ─────────────────────────────────
+
+/// Log levels understood by the runtime (`1`=info, `2`=warn, `3`=error).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Info = 1,
+    Warn = 2,
+    Error = 3,
+}
+
+// ─── Global API (event-side access) ─────────────
+//
+// Thread-local state is set by the generated `morrow_mod_init`; all event
+// dispatch happens on the same thread, so these are always populated in
+// handlers. Outside that (before init, or user-spawned threads) message
+// calls no-op and queries return their "unavailable" default.
+
+/// Broadcast a message to all players' chat. No-op if runtime not set.
+pub fn send_message(msg: &str) {
+    __internal::with_api(|api| unsafe {
+        ((*api).send_message)(0, msg.as_ptr(), msg.len() as u32)
+    });
+}
+
+/// Run a server command. No-op if runtime not set.
+pub fn execute_command(cmd: &str) {
+    __internal::with_api(|api| unsafe {
+        ((*api).execute_command)(0, cmd.as_ptr(), cmd.len() as u32)
+    });
+}
+
+/// Online player count, or -1 if the host API is not registered.
+pub fn player_count() -> i32 {
+    __internal::with_api(|api| unsafe { ((*api).get_player_count)(0) }).unwrap_or(-1)
+}
+
+/// Online player names. Empty when runtime not set.
+pub fn player_list() -> Vec<String> {
+    let mut buf = [0u8; 4096];
+    let n = __internal::with_api(|api| unsafe {
+        ((*api).get_player_list)(0, buf.as_mut_ptr(), buf.len() as u32)
+    })
+    .unwrap_or(0);
+    parse_player_list(crate::read_str(buf.as_ptr(), n))
+}
+
+/// World time in ticks, or -1 if the host API is not registered.
+pub fn world_time() -> i64 {
+    __internal::with_api(|api| unsafe { ((*api).get_world_time)(0) }).unwrap_or(-1)
+}
+
+/// Read this mod's config.toml (raw TOML text). None when not set/packaged.
+pub fn config() -> Option<String> {
+    let name = __internal::current_mod_name()?;
+    let mut buf = [0u8; 4096];
+    let n = __internal::with_api(|api| unsafe {
+        ((*api).get_config)(0, name.as_ptr(), name.len() as u32, buf.as_mut_ptr(), buf.len() as u32)
+    })
+    .unwrap_or(0);
+    (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+}
+
+/// Log through the host; falls back to stderr when runtime not set.
+pub fn log(level: LogLevel, msg: &str) {
+    __internal::log(level as u32, msg)
+}
+
+// Re-export the proc macros
+pub use morrow_macros::{event, mod_main};
 
 // Re-export commonly used types
 pub use context::Context;
@@ -78,18 +158,31 @@ pub mod prelude {
     pub use crate::context::Context;
     pub use crate::error::MorrowError;
     pub use crate::runtime_api::RuntimeApi;
-    pub use morrow_macros::mod_main;
-    pub use crate::{info, warn, error};
+    pub use crate::LogLevel;
+    pub use crate::{
+        config, error, execute_command, info, log, player_count, player_list, send_message,
+        warn, world_time,
+    };
+    pub use morrow_macros::{event, mod_main};
 }
 
 // ─── Logging macros ────────────────────────────
+//
+// Routed through the host log (level 1/2/3) once the runtime is set;
+// before that they fall back to stderr. `[mod-name]` prefix is applied
+// at the call site via `CARGO_PKG_NAME`.
 
 /// Log an info-level message to the Minecraft server log.
-/// Format: `[mod-name] msg`
+///
+/// Note: explicit format arguments are required — implicit capture
+/// (`info!("{player}")`) does not work inside a macro.
 #[macro_export]
 macro_rules! info {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {
-        eprintln!(concat!("[", env!("CARGO_PKG_NAME"), "] ", $fmt), $($arg),*)
+        $crate::__internal::log(
+            1,
+            &format!(concat!("[", env!("CARGO_PKG_NAME"), "] ", $fmt), $($arg),*),
+        )
     };
 }
 
@@ -97,7 +190,10 @@ macro_rules! info {
 #[macro_export]
 macro_rules! warn {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {
-        eprintln!(concat!("[", env!("CARGO_PKG_NAME"), "] WARN: ", $fmt), $($arg),*)
+        $crate::__internal::log(
+            2,
+            &format!(concat!("[", env!("CARGO_PKG_NAME"), "] WARN: ", $fmt), $($arg),*),
+        )
     };
 }
 
@@ -105,6 +201,58 @@ macro_rules! warn {
 #[macro_export]
 macro_rules! error {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {
-        eprintln!(concat!("[", env!("CARGO_PKG_NAME"), "] ERROR: ", $fmt), $($arg),*)
+        $crate::__internal::log(
+            3,
+            &format!(concat!("[", env!("CARGO_PKG_NAME"), "] ERROR: ", $fmt), $($arg),*),
+        )
     };
+}
+
+// ─── Tests (pure — no FFI) ─────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_str_null_is_empty() {
+        assert_eq!(read_str(std::ptr::null(), 0), "");
+    }
+
+    #[test]
+    fn read_str_ok() {
+        let bytes = b"hello";
+        assert_eq!(read_str(bytes.as_ptr(), 5), "hello");
+    }
+
+    #[test]
+    fn read_str_bad_utf8() {
+        assert_eq!(read_str(b"\xff\xfe".as_ptr(), 2), "<invalid utf-8>");
+    }
+
+    #[test]
+    fn parse_player_list_basic() {
+        assert_eq!(
+            parse_player_list("alice,bob,carol"),
+            vec!["alice".to_string(), "bob".to_string(), "carol".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_player_list_empty() {
+        assert!(parse_player_list("").is_empty());
+        assert_eq!(parse_player_list(",,,"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_player_list_single() {
+        assert_eq!(parse_player_list("solo"), vec!["solo".to_string()]);
+    }
+
+    #[test]
+    fn log_level_encoding() {
+        assert_eq!(LogLevel::Info as u32, 1);
+        assert_eq!(LogLevel::Warn as u32, 2);
+        assert_eq!(LogLevel::Error as u32, 3);
+    }
 }

@@ -23,6 +23,11 @@ dependencies {
 def nativeLibDir = file("${rootDir}/../target/release")
 
 tasks.processResources {
+    // 替换 fabric.mod.json 里的 ${version} 占位符
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
     from(nativeLibDir) {
         include '*.so'
         into 'natives/linux-x86_64'

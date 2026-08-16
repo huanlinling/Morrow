@@ -1,0 +1,12 @@
+[package]
+name = "motd"
+version = "0.1.0"
+description = "Welcome message from config.toml"
+authors = ["Morrow Contributors"]
+license = "MIT"
+
+[morrow]
+api_version = 1
+
+[entry]
+symbol = "morrow_mod_init"

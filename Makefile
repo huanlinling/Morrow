@@ -16,7 +16,7 @@ build-runtime:
 
 build-mods:
 	@echo "==> Building example mods..."
-	cargo build --release -p hello-morrow -p chat-bot
+	cargo build --release -p hello-morrow -p chat-bot -p motd
 
 build: build-runtime build-mods
 	@echo "==> Build complete."
@@ -34,8 +34,10 @@ test-bridge:
 # ─── Package ─────────────────────────────────
 
 package-hello: build-mods
-	@echo "==> Packaging hello-morrow..."
+	@echo "==> Packaging hello-morrow (+ chat-bot dependency)..."
 	bash scripts/package-mod.sh examples/hello-morrow
+	bash scripts/package-mod.sh examples/chat-bot
+	bash scripts/package-mod.sh examples/motd
 
 # ─── Clean ──────────────────────────────────
 

@@ -32,32 +32,6 @@ impl TickRegistry {
         self.callbacks.remove(mod_name);
     }
 
-    /// Fire all tick callbacks.
-    ///
-    /// Each callback is panic-isolated. Panicking mods are quarantined
-    /// and will not receive future callbacks.
-    ///
-    /// Returns the names of mods that panicked.
-    pub fn dispatch(&self, tick: u64) -> Vec<String> {
-        let mut panicked = Vec::new();
-        for (name, callback) in &self.callbacks {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                unsafe { callback(tick) };
-            }));
-
-            if let Err(payload) = result {
-                let msg = payload
-                    .downcast_ref::<&str>()
-                    .copied()
-                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-                    .unwrap_or("<non-string panic>");
-                eprintln!("[Morrow] Mod '{name}' panicked during tick {tick}: {msg}");
-                panicked.push(name.clone());
-            }
-        }
-        panicked
-    }
-
     /// Number of registered tick callbacks.
     #[allow(dead_code)]
     pub fn len(&self) -> usize {

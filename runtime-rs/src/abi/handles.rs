@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Global handle counter — starts at 1 so 0 is always "invalid".
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -68,11 +68,18 @@ impl Handle {
 // Handle table
 // ---------------------------------------------------------------------------
 
-/// A thread-safe table mapping `Handle → T`.
+/// A thread-safe table mapping `Handle → Arc<T>`.
 ///
 /// Used as the internal registry for runtime objects, mod instances, etc.
+///
+/// ## Locking
+///
+/// `with`/`with_first`/`fold` clone the `Arc` under the lock, then run the
+/// callback **outside** it. Mod callbacks may re-enter the table (the
+/// "handle 0 = any runtime" convention) without deadlocking — the entries
+/// lock is never held across user code.
 pub struct HandleTable<T: Send + 'static> {
-    entries: Mutex<HashMap<u64, T>>,
+    entries: Mutex<HashMap<u64, Arc<T>>>,
 }
 
 impl<T: Send + 'static> HandleTable<T> {
@@ -85,22 +92,52 @@ impl<T: Send + 'static> HandleTable<T> {
     /// Insert an object and return its handle.
     pub fn insert(&self, value: T) -> Handle {
         let handle = Handle::new();
-        self.entries.lock().unwrap().insert(handle.0, value);
+        self.entries.lock().unwrap().insert(handle.0, Arc::new(value));
         handle
     }
 
     /// Remove an object by handle, returning it if it existed.
-    pub fn remove(&self, handle: Handle) -> Option<T> {
+    /// The kernel is dropped once the last `Arc` reference goes away.
+    pub fn remove(&self, handle: Handle) -> Option<Arc<T>> {
         self.entries.lock().unwrap().remove(&handle.0)
     }
 
-    /// Get a reference to the object behind a handle.
+    /// Get an owned reference to the object behind a handle.
     #[allow(dead_code)] // used in M3+ for mod registry lookups
-    pub fn get(&self, handle: Handle) -> Option<T>
-    where
-        T: Clone,
-    {
+    pub fn get(&self, handle: Handle) -> Option<Arc<T>> {
         self.entries.lock().unwrap().get(&handle.0).cloned()
+    }
+
+    /// Run `f` with a reference to the entry behind `handle`.
+    ///
+    /// The entries lock is released before `f` runs, so `f` may re-enter
+    /// the table (e.g. mod API calls using handle 0).
+    pub fn with<F, R>(&self, handle: Handle, f: F) -> Option<R>
+    where
+        F: FnOnce(&T) -> R,
+    {
+        let entry = self.entries.lock().unwrap().get(&handle.0).cloned()?;
+        Some(f(&entry))
+    }
+
+    /// Run `f` with any single live entry (used by the "handle 0 = any
+    /// runtime" convention of the mod-facing API).
+    pub fn with_first<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&T) -> R,
+    {
+        let entry = self.entries.lock().unwrap().values().next().cloned()?;
+        Some(f(&entry))
+    }
+
+    /// Fold over all live entries. The lock is released before `f` runs.
+    pub fn fold<F, R>(&self, init: R, mut f: F) -> R
+    where
+        F: FnMut(R, &T) -> R,
+    {
+        let entries: Vec<Arc<T>> =
+            self.entries.lock().unwrap().values().cloned().collect();
+        entries.iter().fold(init, |acc, v| f(acc, v.as_ref()))
     }
 
     /// Return the number of live entries.
@@ -152,12 +189,23 @@ mod tests {
         let table = HandleTable::new();
         let h = table.insert("hello".to_string());
         assert_eq!(table.len(), 1);
-        assert_eq!(table.get(h), Some("hello".to_string()));
+        assert_eq!(table.get(h).map(|a| a.as_ref().clone()), Some("hello".to_string()));
 
         let removed = table.remove(h);
-        assert_eq!(removed, Some("hello".to_string()));
+        assert_eq!(removed.map(|a| a.as_ref().clone()), Some("hello".to_string()));
         assert_eq!(table.len(), 0);
-        assert_eq!(table.get(h), None);
+        assert!(table.get(h).is_none());
+    }
+
+    #[test]
+    fn test_with_runs_outside_lock() {
+        // `with` must release the entries lock before calling `f` —
+        // mod callbacks re-enter the table (handle 0 = any runtime);
+        // re-entering here would deadlock if the lock were still held.
+        let table = HandleTable::new();
+        let h = table.insert(42u64);
+        let result = table.with(h, |_v| table.len());
+        assert_eq!(result, Some(1));
     }
 
     #[test]

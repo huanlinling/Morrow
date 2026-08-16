@@ -112,11 +112,21 @@ pub struct ModExports {
     pub player_death_callback: Option<unsafe extern "C" fn(*const u8, u32, *const u8, u32)>,
 }
 
-/// Returns the mod name and discovered optional exports on success.
-pub fn load_package(
+/// Result of the (lock-held) preparation phase of loading a mod.
+pub struct PrepareResult {
+    pub manifest: Manifest,
+    /// Re-opened package path for the (lock-free) finish phase.
+    pub path: PathBuf,
+}
+
+/// Phase 1 (call while holding the runtime data lock): open the package,
+/// parse the manifest, and verify dependencies against the registry.
+///
+/// Does not touch the native library — no mod code runs here.
+pub fn prepare_load(
     package_path: &Path,
-    registry: &mut ModRegistry,
-) -> Result<(String, ModExports), String> {
+    registry: &ModRegistry,
+) -> Result<PrepareResult, String> {
     // 1. Open ZIP
     let file = std::fs::File::open(package_path)
         .map_err(|e| format!("cannot open {}: {e}", package_path.display()))?;
@@ -137,36 +147,64 @@ pub fn load_package(
         }
     }
 
-    // 3b. Read optional config.toml
-    let config_data = read_zip_entry_optional(&mut archive, "config.toml");
-
     eprintln!(
         "[Morrow] Loading mod: {} v{}",
         manifest.package.name, manifest.package.version
     );
 
-    // 3. Determine platform
+    Ok(PrepareResult {
+        manifest,
+        path: package_path.to_path_buf(),
+    })
+}
+
+/// Phase 2 (call WITHOUT holding any runtime lock): extract the platform
+/// artifact, dlopen it, call the entry point, and discover optional exports.
+///
+/// Mod init code runs here and may freely re-enter the runtime API —
+/// no lock is held across this call.
+pub fn finish_load(
+    prepared: &PrepareResult,
+) -> Result<(LoadedMod, ModExports, String), String> {
+    let manifest = &prepared.manifest;
+    let package_path = &prepared.path;
+
+    // 1. Open ZIP (fresh handle for the artifact)
+    let file = std::fs::File::open(package_path)
+        .map_err(|e| format!("cannot open {}: {e}", package_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("invalid .morrow package: {e}"))?;
+
+    // 2. Determine platform
     let platform = Platform::detect();
     let artifact_path = format!("{}/", platform.dir_name());
 
-    // 4-5. Find and extract the artifact for this platform
-    let (temp_dir, lib_path) = extract_artifact(&mut archive, &artifact_path, &manifest)?;
+    // 3-4. Find and extract the artifact for this platform
+    let (temp_dir, lib_path) = extract_artifact(&mut archive, &artifact_path, manifest)?;
 
-    // 6. dlopen
+    // 5. dlopen
     let library = unsafe {
         libloading::Library::new(&lib_path)
             .map_err(|e| format!("failed to load native mod library: {e}"))?
     };
 
-    // 7-8. Build RuntimeApi and call entry point
-    let api = RuntimeApi::new();
+    // 6-7. Build RuntimeApi and call entry point.
+    //
+    // The API is a pure function-pointer vtable (all entries are static
+    // `crate::morrow_*` fns — no owned resources), so we leak it to a
+    // `'static` allocation: mods store this pointer in a thread-local at
+    // init and read it again from every later event callback (tick,
+    // server_start, player_join, ...). A stack local would dangle as soon
+    // as this function returns — the first event dispatch would read a
+    // garbage function pointer and jump to it (SIGSEGV).
+    let api: &'static RuntimeApi = Box::leak(Box::new(RuntimeApi::new()));
     let entry_symbol = &manifest.entry.symbol;
     unsafe {
         let entry: libloading::Symbol<unsafe extern "C" fn(*const RuntimeApi) -> u32> = library
             .get(entry_symbol.as_bytes())
             .map_err(|e| format!("entry symbol '{entry_symbol}' not found: {e}"))?;
 
-        let status = entry(&api as *const RuntimeApi);
+        let status = entry(api as *const RuntimeApi);
         if status != 0 {
             return Err(format!(
                 "mod '{}' entry point returned error code {status}",
@@ -175,7 +213,7 @@ pub fn load_package(
         }
     }
 
-    // 9. Discover optional exports
+    // 8. Discover optional exports
     let tick_callback: Option<unsafe extern "C" fn(u64)> = unsafe {
         library.get::<unsafe extern "C" fn(u64)>(b"morrow_mod_tick")
             .ok().map(|sym| *sym.into_raw())
@@ -223,7 +261,8 @@ pub fn load_package(
         eprintln!("[Morrow]   Optional: morrow_mod_server_stop");
     }
 
-    // 10. Track
+    // 9. Package up (tracking/registration is the caller's job, under
+    //    its own lock — never held across mod code).
     let exports = ModExports {
         tick_callback,
         server_start_callback,
@@ -236,20 +275,17 @@ pub fn load_package(
         player_death_callback,
     };
     let name = manifest.package.name.clone();
-    registry.insert(
-        name.clone(),
-        LoadedMod {
-            manifest,
-            library,
-            temp_dir,
-            tick_callback: exports.tick_callback,
-            server_start_callback: exports.server_start_callback,
-            server_stop_callback: exports.server_stop_callback,
-        },
-    );
+    let loaded = LoadedMod {
+        manifest: manifest.clone(),
+        library,
+        temp_dir,
+        tick_callback: exports.tick_callback,
+        server_start_callback: exports.server_start_callback,
+        server_stop_callback: exports.server_stop_callback,
+    };
 
     eprintln!("[Morrow] Loaded mod: {name}");
-    Ok((name, exports))
+    Ok((loaded, exports, name))
 }
 
 // ─── Helpers ──────────────────────────────────
