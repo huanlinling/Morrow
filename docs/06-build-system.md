@@ -1,370 +1,79 @@
-# 06 — 构建系统设计
+# 06 — 构建系统（v0.16 现状）
 
-## 开发环境（Docker）
+## 工具链
 
-Morrow 使用 Docker 提供完全隔离、可复现的开发环境。不依赖宿主机上的任何 JDK 或 Rust 安装。
+| 组件 | 版本 | 用途 |
+|------|------|------|
+| JDK | Temurin 21（`--enable-preview`，Panama 在 21 仍 preview） | Java host + 桥接测试 |
+| Rust | stable 1.80+ | runtime / SDK / 示例 mod |
+| Gradle | wrapper 8.10（自动下载）+ fabric-loom 1.7.4 | dev 模式 runServer + Agent JAR |
+| Python 3 | — | `scripts/package-mod.sh` 打包 .morrow |
+| make/bash/gcc | — | Makefile 编排 + Rust 链接 |
 
-### 文件
-
-```
-morrow/
-├── Dockerfile            # 基于 eclipse-temurin:21-jdk + Rust stable
-├── docker-compose.yml    # 挂载源码 + 持久化 Cargo 缓存
-├── .dockerignore         # 精简构建上下文
-└── Makefile              # 常用命令快捷入口
-```
-
-### 日常使用
-
-```bash
-# 第一次：构建 dev 镜像（下载 JDK + Rust，约 3 分钟）
-docker compose build
-
-# 进入开发环境
-docker compose run --rm dev
-# 你现在在一个安装了 JDK 21 + Rust 的容器里
-# /morrow 目录就是你的项目源码（实时同步）
-
-# 直接在容器里跑命令
-docker compose run --rm dev cargo build --release
-docker compose run --rm dev cargo test
-
-# 或者用 Makefile 快捷方式
-make dev          # 进入容器
-make build        # cargo build --release
-make test         # cargo test
-make clean        # 清理
-```
-
-### Dockerfile 解析
-
-```dockerfile
-FROM eclipse-temurin:21-jdk          # OpenJDK 21, TCK 认证构建
-RUN apt-get install build-essential  # GCC, ld, libc — native 编译必需
-RUN curl ... rustup | sh             # Rust stable toolchain
-```
-
-### docker-compose 关键设计
-
-```yaml
-volumes:
-  - .:/morrow                        # 源码即时同步，修改无需 rebuild
-  - cargo-registry:/root/.cargo/registry  # crate 缓存持久化
-  - cargo-git:/root/.cargo/git            # git 依赖缓存
-  - cargo-target:/morrow/runtime-rs/target # 编译缓存持久化
-```
-
-三个 Cargo 缓存 volume 是关键 — 否则每次 `docker compose run` 都是全新容器，`cargo build` 要从头下载编译所有依赖，浪费大量时间。
-
-### 为什么 Docker 适合 Morrow
-
-| 问题 | Docker 怎么解决 |
-|------|----------------|
-| glibc 版本不一致 | Docker image 固定 Ubuntu glibc 版本 |
-| "我机器上能跑" | 所有人的环境完全一致（image hash） |
-| CI 行为不同 | CI 用同一个 Dockerfile |
-| 新人装环境痛苦 | 装 Docker → `docker compose run dev` 就绪 |
-| 污染宿主机 | 所有工具链都在容器里 |
-
-## 构建工具链总览
+## 构建产物与入口
 
 ```
-┌─────────────────────────────────────┐
-│            Morrow Build              │
-│                                      │
-│  Rust       Java          Package    │
-│  Cargo      Gradle+Loom   Morrow CLI │
-│    │           │              │       │
-│    ▼           ▼              ▼       │
-│  .so/.dll   .jar           .morrow   │
-│  (cdylib)   (Fabric mod)   (ZIP)     │
-└─────────────────────────────────────┘
+Makefile
+├── make build          cargo build --release（runtime + 3 个示例 mod）
+├── make test           cargo test（单元 + 集成）
+├── make test-bridge    bash bridge-java/build.sh（Panama 桥接测试）
+├── make package-hello  scripts/package-mod.sh × 3 → *.morrow 包
+└── make clean
+
+bridge-java/build.sh（无 Gradle 依赖，javac 直编）:
+  1. cargo build --release
+  2. javac（PanamaBridge + EventBuffer + M0/M1/CodeTest/Benchmark）
+  3. M0 add 回归 → 4. M1 生命周期 → 5. 事件码 parity → 6. 基准
+
+bridge-java/gradle（fabric-loom，两个用途）:
+  ├─ ./gradlew runServer    dev 冒烟：自动下载 MC 1.20.1 + Yarn + Fabric
+  │                        Loader dev 运行时（Loader 仅当类加载器）
+  └─ ./gradlew build        Agent JAR（Premain-Class: com.morrow.agent.MorrowAgent，
+                            processResources 内嵌 .so → natives/<platform>/）
 ```
 
-## Rust 侧：Cargo Workspace
+生产入口：`java -javaagent:morrow.jar -jar server.jar`（不依赖 Fabric）。
 
-### workspace Cargo.toml
+## Cargo workspace
 
-```toml
-# morrow/Cargo.toml
-[workspace]
-resolver = "2"
-members = [
-    "runtime-rs",
-    "sdk-rs",
-    "sdk-rs/morrow-macros",
-    "examples/hello-morrow",
-    "morrow-cli",
-]
-
-[workspace.package]
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/morrow-mc/morrow"
-
-[workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tracing = "0.1"
-libloading = "0.8"
-zip = "2"
-toml = "0.8"
+```
+members = runtime-rs, runtime-rs/tests/fixtures/testmod,
+          sdk-rs, sdk-rs/morrow-macros,
+          examples/{hello-morrow, chat-bot, motd}
 ```
 
-### runtime-rs/Cargo.toml
+runtime-rs：`crate-type = ["cdylib", "rlib"]`（rlib 供集成测试链接，
+cdylib 进镜像）；依赖刻意最小——zip/toml/serde/libloading/log/tempfile，
+无 async runtime、无 tokio。
 
-```toml
-[package]
-name = "morrow-runtime"
-version.workspace = true
-edition.workspace = true
+## Docker（3 阶段，Dockerfile）
 
-[lib]
-crate-type = ["cdylib"]    # 编译为 .so/.dll
-name = "morrow_runtime"    # 输出: libmorrow_runtime.so
-
-[dependencies]
-# 最小依赖原则 — runtime 要尽可能轻量
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-
-# 不使用 async runtime
-# 不使用 tokio
-# 不使用大型框架
-
-[profile.release]
-opt-level = 3              # 最大优化
-lto = "fat"                # 全 LTO
-codegen-units = 1          # 更好的内联
-panic = "abort"            # 不依赖 panic unwind
-strip = "symbols"          # 减小 .so 体积
+```
+builder (eclipse-temurin:21-jdk-noble + Rust + Gradle)
+  └─ cargo build+test → gradlew build → package mods → make test-bridge
+      ├── runtime (21-jre-noble)：生产镜像 = Agent JAR + .so + mods/
+      │     入口 entrypoint.sh，需挂载 server.jar（Mojang 分发条款）
+      └── dev（默认目标）：基于 builder，loom runServer 即开即测
+            入口 dev-entrypoint.sh，自动下载 MC，EULA=true 可跑
 ```
 
-### sdk-rs/Cargo.toml
+设计要点：builder 阶段跑完所有测试再进 runtime 镜像，生产镜像不含
+工具链；mods/ 目录挂载覆盖内置示例。
 
-```toml
-[package]
-name = "morrow"
-version.workspace = true
-edition.workspace = true
+## CI（.github/workflows/ci.yml）
 
-[lib]
-crate-type = ["rlib"]      # 静态链接到 mod 中
-name = "morrow"
-
-[dependencies]
-morrow-macros = { path = "morrow-macros" }
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-```
-
-### morrow-macros/Cargo.toml
-
-```toml
-[package]
-name = "morrow-macros"
-version.workspace = true
-edition.workspace = true
-
-[lib]
-proc-macro = true
-
-[dependencies]
-syn = { version = "2", features = ["full"] }
-quote = "1"
-proc-macro2 = "1"
-```
-
-## Java 侧：Gradle + Loom
-
-### bridge-java/settings.gradle
-
-```groovy
-pluginManagement {
-    repositories {
-        maven {
-            name = 'Fabric'
-            url = 'https://maven.fabricmc.net/'
-        }
-        gradlePluginPortal()
-    }
-}
-```
-
-### bridge-java/fabric-host/build.gradle
-
-```groovy
-plugins {
-    id 'fabric-loom' version '1.7-SNAPSHOT'
-    id 'maven-publish'
-}
-
-version = project.mod_version
-group = project.maven_group
-
-base {
-    archivesName = project.archives_base_name
-}
-
-dependencies {
-    // Fabric
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-
-    // No Panama dependencies needed — it's in JDK 21 stdlib
-}
-
-processResources {
-    // 将 Rust 构建的 .so 文件复制到 JAR 中
-    from("${rootProject.projectDir}/../runtime-rs/target/release") {
-        include "*.so", "*.dll"
-        into "natives"
-    }
-}
-
-// 自定义任务：构建 Rust runtime
-tasks.register('buildRustRuntime', Exec) {
-    workingDir "${rootProject.projectDir}/../runtime-rs"
-    commandLine 'cargo', 'build', '--release'
-}
-
-// 让 Java 构建依赖 Rust 构建
-tasks.named('processResources').configure {
-    dependsOn 'buildRustRuntime'
-}
-```
-
-### gradle.properties
-
-```properties
-minecraft_version=1.20.1
-yarn_mappings=1.20.1+build.10
-loader_version=0.16.5
-fabric_version=0.92.0+1.20.1
-
-mod_version=0.1.0
-maven_group=com.morrow
-archives_base_name=morrow-host
-```
-
-## 构建流程
-
-### 开发构建
-
-```bash
-# 1. 构建 Rust runtime
-cd runtime-rs
-cargo build --release
-# → target/release/libmorrow_runtime.so
-
-# 2. 构建 Java bridge（自动复制 .so）
-cd bridge-java/fabric-host
-./gradlew build
-# → build/libs/morrow-host-0.1.0.jar
-
-# 3. 构建示例 mod
-cd examples/hello-morrow
-cargo build --release
-# → target/release/libhello_morrow.so
-
-# 4. 打包为 .morrow
-cd ../..
-cargo run --bin morrow-cli -- package ./examples/hello-morrow
-# → hello-morrow.morrow
-```
-
-### CI 构建（全自动）
-
-```yaml
-# .github/workflows/build.yml
-name: Build
-on: [push, pull_request]
-
-jobs:
-  build-runtime:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cd runtime-rs && cargo build --release
-      - uses: actions/upload-artifact@v4
-        with:
-          name: runtime-${{ matrix.os }}
-          path: runtime-rs/target/release/*.{so,dll}
-
-  build-java:
-    runs-on: ubuntu-latest
-    needs: build-runtime
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          java-version: 21
-          distribution: temurin
-      - run: cd bridge-java/fabric-host && ./gradlew build
-```
-
-## 开发工作流
-
-### 快速迭代
-
-```bash
-# 只改 Rust runtime
-cd runtime-rs && cargo build --release
-cp target/release/libmorrow_runtime.so \
-   ~/.minecraft/mods/morrow/native/linux-x86_64/
-# 重启 Minecraft
-
-# 只改 SDK
-cd sdk-rs && cargo build
-cd examples/hello-morrow && cargo build --release
-morrow-cli package . --output ~/.minecraft/mods/
-# 重启 Minecraft
-
-# 只改 Java bridge
-cd bridge-java/fabric-host && ./gradlew build
-cp build/libs/morrow-host-0.1.0.jar ~/.minecraft/mods/
-# 重启 Minecraft
-```
-
-### 调试
-
-```bash
-# Rust 调试构建（带符号、无优化）
-cd runtime-rs && cargo build  # debug mode
-# Java attach native debugger
-java -agentlib:native-debugger ... # 需要专门的 native 调试工具
-
-# 更实际的调试方式：
-# - Rust 侧用 tracing 日志，输出到 stderr
-# - Java 侧用 log4j，输出到 Minecraft log
-# - 跨 FFI 的问题用 error channel 传递
-```
+Ubuntu 单 job：
+1. `cargo build --release` + `cargo test --release`
+2. `scripts/package-mod.sh` × 3 打包示例
+3. `./gradlew --no-daemon build`（bridge-java，内嵌 .so）
+4. `make test-bridge`（Panama 桥接测试）
+5. `nm -D` 校验导出符号（runtime 5 个核心符号 + hello-morrow 10 个
+   `morrow_mod_*` + testmod 8 个）——符号契约回归防线
 
 ## 版本管理
 
 ```
-Morrow 版本号:
-  runtime-rs:   独立版本（遵循 semver）
-  sdk-rs:       与 runtime 主版本同步
-  bridge-java:  独立版本（Java 侧有自己的发布节奏）
-  ABI version:  独立版本（仅在不兼容变更时递增）
-```
-
-建议的发布节奏：
-
-```
-runtime-rs 0.1.0  ←  M1 完成
-runtime-rs 0.2.0  ←  M3 完成
-runtime-rs 0.3.0  ←  M5 完成
-runtime-rs 1.0.0  ←  v1 完成
+runtime-rs / sdk-rs: 独立 semver
+bridge-java:         独立版本（morrow-host）
+ABI version:         独立（0x0001_0000，仅不兼容变更递增主版本）
 ```

@@ -9,7 +9,7 @@
 ## Milestone 0: Environment + First Panama Call
 
 **预计时间：** 1-3 天
-**状态：** 🔨 In Progress
+**状态：** ✅ Done (2026-08)
 
 ### 任务清单
 
@@ -38,7 +38,7 @@ $ java -cp ... com.morrow.HelloPanama
 
 **预计时间：** 1-2 周
 **依赖：** M0
-**状态：** ⬜ Planned
+**状态：** ✅ Done (2026-08)
 
 ### 任务清单
 
@@ -71,7 +71,8 @@ Test: init → shutdown 10 iterations
 
 **预计时间：** 2-3 周
 **依赖：** M1
-**状态：** ⬜ Planned
+**状态：** ✅ Done (2026-08)，后被 v0.11/v0.12 Mixin 自研 loader 取代
+（Fabric 降级为纯类加载器；本表保留为历史计划）
 
 ### 任务清单
 
@@ -100,7 +101,7 @@ Test: init → shutdown 10 iterations
 
 **预计时间：** 2-3 周
 **依赖：** M2
-**状态：** ⬜ Planned
+**状态：** ✅ Done (2026-08)
 
 ### 任务清单
 
@@ -133,7 +134,8 @@ Test: init → shutdown 10 iterations
 
 **预计时间：** 2-3 周
 **依赖：** M3
-**状态：** ⬜ Planned
+**状态：** ✅ Done (2026-08)，事件注册糖采用符号发现而非 EventBus
+（v0.12 起生产路径为批量派发 morrow_dispatch_batch）
 
 ### 任务清单
 
@@ -206,7 +208,7 @@ fn init(ctx: &mut Context) -> Result<(), MorrowError> {
 
 **预计时间：** 1 周
 **依赖：** M5
-**状态：** 🔨 In Progress
+**状态：** ✅ Done (2026-08)，CI workflow 已随 a2c5e16 推送
 
 ### 任务清单
 
@@ -253,32 +255,48 @@ Memory: stable (no growth trend)
 **依赖：** M4
 **状态：** ⬜ Planned
 
+**性质（v0.16 评审定调）：验收，不是研究。** 性能定位结论见
+design.md §零：桥接层已到终点（空 tick 0.04μs，占预算 0.00008%），
+M7 的目的是用数据向外部证明承诺、锁定回归基线——不是找瓶颈再优化。
+
 ### 任务清单
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 7.1 | JNI vs Panama FFM 对比 benchmark | ⬜ |
-| 7.2 | Tick overhead 详细测量 | ⬜ |
-| 7.3 | Memory footprint 测量 | ⬜ |
-| 7.4 | Event dispatch latency 测量 | ⬜ |
-| 7.5 | 多 mod 扩展性测试 | ⬜ |
+| 7.1 | JNI vs Panama FFM 对比 benchmark（文档化"单价"差距，已知 ~2-3x） | ⬜ |
+| 7.2 | Tick 全链路测量：EventBuffer 写入 → finish → dispatch_batch → 解析 → 派发 | ✅ 0.393μs/tick（1 事件），0.617μs（8 事件） |
+| 7.3 | Memory footprint 测量（运行时基线 + 每 mod 增量 + 每 tick arena 峰值） | ⬜ |
+| 7.4 | Event dispatch latency 测量（每事件类型，含/不含 catch_unwind） | ✅ 边际 77ns/事件（批量内） |
+| 7.5 | 多 mod 扩展性测试（1/10/50 个 no-op mod，验证 O(1) 派发与 mod 数无关） | ✅ 1.399μs@50mods；scalability.rs 进 CI 防二次爆炸 |
+| 7.6 | 结果写入 docs/09-benchmarks.md，作为后续性能回归基线 | ✅ |
 
 ### 验收标准
 
 ```
 Panama vs JNI:
-  call latency:  Panama 5-10ns vs JNI 20-30ns
-  tick overhead: Panama <100μs vs JNI <200μs
+  call latency:  Panama ~9ns vs JNI 20-30ns（确认数量级即可）
+
+Tick 全链路（空 runtime，1 事件）:
+  < 1μs/tick（预算 50ms 的 0.002%）
+
+Scalability（每 mod 一个 tick 回调）:
+  1  mod:   < 200μs/tick
+  10 mods:  < 500μs/tick
+  50 mods:  < 2ms/tick
+  增长趋势:   近似线性于 mod 数（每 mod ~μs 级），派发开销本身不随 mod 数放大
 
 Memory:
-  runtime base:  <2MB
-  per mod:      <1MB (empty mod)
-
-Scalability:
-  1  mod:   <200μs/tick
-  10 mods:  <500μs/tick
-  50 mods:  <2ms/tick
+  runtime base:  < 2MB
+  per mod:       < 1MB (empty mod)
 ```
+
+### 已知缺口（待排期，非 M7 范围）
+
+- **独立 agent 模式缺 Mixin fat-jar 打包**：`morrow-host-0.1.0.jar` 内 0 个
+  Mixin 类（`modImplementation` 不打包），`java -javaagent:morrow.jar` 纯
+  独立路径会 ClassNotFound——M6 验证实际走的 loom runServer（Fabric 提供
+  Mixin）。修法：shadow/fat-jar 合并 `org.spongepowered:mixin`。决策：
+  保留独立 loader 定位，修复排期另行决定（2026-08-17 会话结论）。
 
 ---
 

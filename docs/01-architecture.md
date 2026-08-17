@@ -1,297 +1,132 @@
-# 01 — 完整架构
+# 01 — 完整架构（v0.16）
 
 ## 架构全景图
 
 ```
-                    Minecraft (Java) — 游戏主进程
-                          │
-          ┌───────────────┼───────────────┐
-          │               │               │
-     Fabric API      Java Mod A      Java Mod B
-          │
-     MorrowHostMod (Fabric ModInitializer)
-          │
-┌─────────┼─────────┐
-│   Panama FFM API   │  ← JDK 21 java.lang.foreign
-│   ┌─────────────┐  │
-│   │  Linker      │  │  System linker (libc calling convention)
-│   │  Arena       │  │  Confined arena per tick
-│   │  MemorySeg   │  │  Off-heap zero-copy buffers
-│   └──────┬───────┘  │
-│          │          │
-│   Downcall Handles  │  Java → Rust calls
-│   Upcall Stubs      │  Rust → Java callbacks
-└──────────┼──────────┘
-           │ FFI Boundary (C ABI)
-┌──────────┼──────────┐
-│   extern "C" fns    │  Stable ABI entry points
-│   ┌──────┴───────┐  │
-│   │ Panic Layer   │  │  catch_unwind at every FFI entry
-│   │ ┌───────────┐ │  │
-│   │ │  Kernel    │ │  │  mod registry + event bus + scheduler
-│   │ │ ┌───────┐ │ │  │
-│   │ │ │ Mod A │ │ │  │  dlopen'd .so (or static linked?)
-│   │ │ │ Mod B │ │ │  │
-│   │ │ │ Mod C │ │ │  │
-│   │ │ └───────┘ │ │  │
-│   │ └───────────┘ │  │
-│   └───────────────┘  │
-│  Morrow Runtime Core │  Rust cdylib
-└──────────────────────┘
+java -javaagent / -jar server.jar + morrow.jar（drop 进 mods/）
+  │
+  ├─ Fabric Loader 仅作为类加载器（Morrow 不依赖 Fabric API）
+  │     └─ Mixin → MinecraftServerMixin（唯一的注入点）
+  │           ├─ loadWorld RETURN  → MorrowMod.init()
+  │           ├─ tick HEAD        → MorrowMod.onTick()  → EventBuffer 累积
+  │           ├─ tick RETURN      → MorrowMod.flushBatch() → 1 次 downcall/tick
+  │           └─ shutdown HEAD    → MorrowMod.onShutdown()
+  │
+  └─ Panama FFM（JDK 21 java.lang.foreign）
+        ├─ Downcalls：morrow_init / morrow_load_mod / morrow_dispatch_batch /
+        │            morrow_dispatch_server_start|stop / morrow_register_host_api /
+        │            morrow_dispatch_command / morrow_shutdown
+        └─ HostVtable（7 个 upcall stub，Arena.global() 分配 56 字节）
+             get_player_count / send_message / get_player_list /
+             execute_command / get_world_time / log_message / get_world_snapshot
+        │
+        └─ Rust Runtime（libmorrow_runtime.so）
+             ├─ 每个 extern "C" 入口包 catch_unwind（panic 绝不穿透 FFI）
+             ├─ RuntimeKernel：单把 Mutex<RuntimeData> 装全部状态
+             │    registry / tick / lifecycle / errors / host_api / commands /
+             │    quarantines / configs / events / snapshot
+             ├─ morrow_dispatch_batch：零拷贝解析 wire format →
+             │    锁内收集回调表 → 锁外逐个 dispatch（每个回调独立 catch_unwind）
+             ├─ WorldSnapshot：每 tick 1 次 upcall 刷新，mod API 查询零 upcall
+             └─ Mod A, B, C...（dlopen 的 cdylib，符号发现注册回调）
 ```
 
 ## 分层详解
 
-### Layer 0: Fabric Loader + API
-
-Fabric Loader 负责：
-- 类加载（Mixin、mod JAR 发现）
-- 生命周期调度
-- Mixin 注入
-
-Morrow 不修改 Fabric Loader，只作为一个普通的 Fabric Mod 存在。
-
-**关键依赖：**
-- `fabric-loader`: 加载 MorrowHostMod
-- `fabric-api`: 事件系统、注册表等
-
-### Layer 1: Morrow Host Adapter (Java, runs inside JVM)
-
-**模块分解：**
+### Layer 1: Java Host（bridge-java）
 
 ```
-com.morrow.host
-├── MorrowMod.java          # implements ModInitializer
-├── NativeLibraryLoader.java # 平台感知的 .so/.dll 加载
-├── PanamaBridge.java        # 一次性初始化 Panama 链接
-├── LifecycleCoordinator.java # 管理 JVM ↔ Rust 生命周期同步
-├── EventDispatcher.java     # Fabric events → Rust dispatch
-├── CapabilityChannel.java   # Capability 协商
-├── ArenaManager.java        # Arena 分配策略
-└── NativeCrashDetector.java  # 检测 native 崩溃并尝试恢复
+src/main/java/com/morrow/
+├── agent/MorrowAgent.java          # premain：注册 Mixin
+├── mixin/MinecraftServerMixin.java # 唯一注入点：loadWorld / tick / shutdown
+└── host/
+    ├── MorrowMod.java              # 宿主逻辑：init / onTick / flushBatch / onShutdown
+    ├── PanamaBridge.java           # 一次性 SymbolLookup + downcall MethodHandle
+    ├── NativeLibraryLoader.java    # 平台感知加载 libmorrow_runtime.so
+    └── EventBuffer.java            # 每 tick 事件累积 → off-heap MemorySegment
 ```
 
-**MorrowMod.java 启动序列：**
+**启动序列（MorrowMod.init，由 Mixin 在 loadWorld RETURN 触发）：**
+1. 加载 native runtime → 2. 建 Panama bridge → 3. `morrow_init(ABI_VERSION)`
+→ 4. 扫描 `mods/*.morrow` 逐个 `morrow_load_mod`（失败的包重试一轮，给依赖排序）→
+5. 绑定 `morrow_dispatch_batch` → 6. `morrow_dispatch_server_start` →
+7. 注册 HostVtable（7 个 upcall stub）。
 
-```java
-public class MorrowMod implements ModInitializer {
-    @Override
-    public void onInitialize() {
-        // 1. Platform detection
-        Platform platform = Platform.detect();  // os.name, os.arch
-
-        // 2. Load native runtime
-        Path runtimeLib = NativeLibraryLoader.load(
-            platform, "morrow_runtime");
-
-        // 3. Setup Panama bridge
-        PanamaBridge bridge = PanamaBridge.create(runtimeLib);
-
-        // 4. Initialize runtime
-        long runtimeHandle = bridge.morrowInit(ABI_VERSION);
-
-        // 5. Discover and load mods
-        List<Path> modPackages = ModDiscovery.scan("mods/");
-        for (Path pkg : modPackages) {
-            bridge.morrowLoadMod(runtimeHandle, pkg);
-        }
-
-        // 6. Attach lifecycle hooks
-        LifecycleCoordinator.attach(runtimeHandle, bridge);
-
-        // 7. Start event dispatch
-        EventDispatcher.start(runtimeHandle, bridge);
-    }
-}
-```
+**为什么是 Agent + Mixin 而不是 Fabric API：** v0.11 前 Morrow 是 Fabric
+ModInitializer；v0.12 起改为 Mixin 直接注入 `MinecraftServer`，Fabric 只当
+类加载器用。收益：不依赖 Fabric API 版本链，`morrow.jar` 一个包即装即用。
 
 ### Layer 2: Panama Bridge
 
-**为什么 Panama 优于 JNI：**
+- **Downcall**：`Linker.downcallHandle` + `invokeExact`，实测 9.3-9.7ns/次。
+- **Upcall**：7 个 `upcallStub` 的地址写进 56 字节 vtable，`morrow_register_host_api`
+  一次性传给 Rust（Rust 侧按 `HostVtable` `#[repr(C)]` 布局读取）。
+- **内存**：`Arena.global()` 只用于长生命周期对象（vtable、upcall stub）；
+  事件数据用 EventBuffer 的 per-tick `Arena.ofConfined()`，dispatch 后 close。
 
-JNI 有三个致命问题：
-
-1. **GlobalRef/LocalRef 管理复杂** — Java GC 与 native 生命周期耦合，遗忘 DeleteLocalRef 导致内存泄漏
-2. **类型系统薄弱** — `jint`, `jlong`, `jobject` 不够表达复杂类型
-3. **调用开销** — JNI 调用路径经过多层 JVM 内部转换
-
-Panama FFM 直接解决了这三个问题：
-
-- **Arena** — 显式内存作用域，arena.close() 自动释放所有分配，杜绝泄漏
-- **ValueLayout** — 类型安全的内存布局描述，编译期可检查
-- **MethodHandle** — JIT 可内联 downcall，理论延迟低至 0 cycles
-
-**Downcall 示例（Java → Rust）：**
-
-```java
-// 一次性初始化（启动时）
-Linker linker = Linker.nativeLinker();
-SymbolLookup runtime = SymbolLookup.libraryLookup(
-    Path.of("libmorrow_runtime.so"), Arena.global());
-
-MethodHandle morrow_init = linker.downcallHandle(
-    runtime.find("morrow_init").orElseThrow(),
-    FunctionDescriptor.of(
-        ValueLayout.JAVA_LONG,  // return: Handle
-        ValueLayout.JAVA_INT    // param: abi_version
-    ));
-
-// 调用（每次）
-long handle = (long) morrow_init.invokeExact(1);
-```
-
-**Upcall 示例（Rust → Java 回调）：**
-
-```java
-// Java side: 创建 upcall stub 传给 Rust
-MethodHandle onEvent = linker.upcallStub(
-    MethodHandles.lookup().findStatic(
-        EventDispatcher.class, "onRustEvent",
-        MethodType.methodType(void.class, long.class, long.class)
-    ),
-    FunctionDescriptor.ofVoid(
-        ValueLayout.JAVA_LONG,  // event_type_ptr
-        ValueLayout.JAVA_LONG   // event_data_ptr
-    ),
-    Arena.global()
-);
-
-// 把 upcall stub 的内存地址传给 Rust
-morrow_register_callback(runtimeHandle,
-    /* event_type */ "server.tick",
-    /* callback */ onEventStub.address()
-);
-```
-
-### Layer 3: Morrow Runtime Core (Rust)
-
-**内部架构：**
+### Layer 3: Rust Runtime（runtime-rs）
 
 ```
-runtime-rs/
-├── src/
-│   ├── lib.rs          # extern "C" exports + module tree
-│   ├── abi/            # ABI contract implementation
-│   │   ├── mod.rs
-│   │   ├── handles.rs   # Opaque Handle<T> implementation
-│   │   └── arena.rs     # Rust-side Arena (wraps Java Arena ptr)
-│   ├── kernel/
-│   │   ├── mod.rs       # RuntimeKernel struct + state machine
-│   │   ├── registry.rs  # ModRegistry: Map<ModId, LoadedMod>
-│   │   └── config.rs    # Runtime configuration
-│   ├── event/
-│   │   ├── mod.rs       # EventBus: Vec<EventListener>
-│   │   ├── types.rs     # Standard event type definitions
-│   │   └── dispatch.rs  # dispatch_event implementation
-│   ├── mod_loader/
-│   │   ├── mod.rs       # Mod loading orchestration
-│   │   ├── manifest.rs  # .morrow manifest parsing
-│   │   └── artifact.rs  # Platform artifact selection
-│   ├── cap/
-│   │   ├── mod.rs       # CapabilityRegistry
-│   │   └── types.rs     # CapabilityId, Capability trait
-│   ├── panic.rs         # Panic boundary utilities
-│   ├── error.rs         # ErrorChannel implementation
-│   └── util/
-│       ├── strings.rs   # FFI string helpers
-│       └── ffi.rs       # Common FFI utilities
+src/
+├── lib.rs            # 全部 extern "C" 导出 + 批量解析/dispatch 主循环
+├── abi/
+│   ├── mod.rs        # ABI 版本、结果码、is_abi_compatible
+│   └── handles.rs    # Handle(u64) + HandleTable<T>（Arc 注册表）
+├── runtime/
+│   ├── mod.rs        # RuntimeKernel：Mutex<RuntimeData> + 状态机
+│   └── state.rs      # Ready / ShuttingDown / Dead
+├── host_api.rs       # HostVtable、WorldSnapshot、CommandRegistry、Quarantine
+├── event/tick.rs     # TickRegistry（mod 名 → fn 指针）
+├── mod_loader/       # .morrow ZIP 解析、manifest、平台 artifact、dlopen
+├── panic.rs          # ffi_boundary：每个 FFI 入口的 catch_unwind 包装
+├── error.rs          # ErrorChannel
+└── logger.rs
 ```
 
-**Handle 系统的实现：**
+**并发模型（v0.16 固化）：**
+- 全部每-runtime 状态在**一把** `Mutex<RuntimeData>` 里（旧版是 8 个全局 map）。
+- 铁律：**锁内收集（clone fn 指针表）、锁外调用**。mod 回调可以重入任意
+  Runtime API 而不死锁。
+- 每个 mod 回调独立 `catch_unwind`；panic 的 mod 进 Quarantine，后续 tick
+  跳过它，其他 mod 与服务器继续运行。
 
-```rust
-use std::sync::atomic::{AtomicU64, Ordering};
+### Layer 4: SDK（sdk-rs + morrow-macros）
 
-static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+- `#[morrow::mod_main]` 生成 `morrow_mod_init` 导出符号。
+- `#[morrow::event(kind)]`（tick/join/leave/chat/break/place/death/start/stop）
+  生成对应的 `morrow_mod_*` 导出符号——与运行时的符号发现 ABI 匹配。
+- 全局 API（`send_message` / `player_count` / `config::<T>` ...）走 global
+  static vtable，mod 自 spawn 的线程也可用；未初始化时显式 panic。
+- `read_str` 零拷贝借用事件缓冲区，无每事件分配。
 
-/// Opaque handle — 对外是 u64，内部映射到具体对象
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct Handle(u64);
-
-impl Handle {
-    pub fn new() -> Self {
-        Handle(NEXT_HANDLE.fetch_add(1, Ordering::SeqCst))
-    }
-
-    pub fn as_u64(self) -> u64 { self.0 }
-    pub fn from_u64(raw: u64) -> Self { Handle(raw) }
-}
-
-/// 带 generation 的 handle（防止 use-after-free）
-#[derive(Debug)]
-struct HandleEntry<T> {
-    generation: u32,
-    data: Option<T>,
-}
-
-pub struct HandleTable<T> {
-    entries: Vec<HandleEntry<T>>,
-    free_list: Vec<usize>,
-}
-```
-
-### Layer 4: SDK (Rust, for mod developers)
-
-SDK 是对 Runtime Core ABI 的 ergonomic 封装。
-
-**开发者视角：**
-
-```rust
-use morrow::prelude::*;
-
-#[morrow::mod_main]
-fn init(ctx: &mut Context) -> Result<(), MorrowError> {
-    // 注册事件监听
-    ctx.event_bus()?.on::<ServerTick>(|event| {
-        if event.tick_number % 20 == 0 {
-            // 获取在线玩家
-            let players = event.server().online_players();
-            morrow::info!("Online players: {}", players.len());
-        }
-    });
-
-    // 注册命令
-    ctx.commands()?.register("hello", |args| {
-        morrow::info!("Hello, {}!", args.get(0).unwrap_or(&"world".into()));
-    });
-
-    Ok(())
-}
-```
-
-### 数据流
-
-**Tick 数据流（最热路径）：**
+## 热路径数据流（每 tick）
 
 ```
-Minecraft Server Thread
-  │
-  ├─ Tick N begins
-  │
-  ├─ Fabric ServerTickCallback (Java)
-  │   └─ EventDispatcher.onServerTick()
-  │       └─ try (Arena arena = Arena.ofConfined()) {
-  │             // 1. 写入 tick 数据到 off-heap MemorySegment
-  │             MemorySegment tickData = arena.allocate(8);
-  │             tickData.set(JAVA_LONG, 0, tickNumber);
-  │
-  │             // 2. 调用 Rust (单次 downcall)
-  │             morrow_tick.invokeExact(runtimeHandle);
-  │
-  │             // 3. Rust 内部通过 upcall 获取 tick data
-  │             //    或直接读 MemorySegment
-  │
-  │             // 4. arena 自动释放 tickData
-  │           }
-  │
-  ├─ Fabric tick processing continues (Java mods)
-  │
-  └─ Tick N ends
+tick HEAD   EventBuffer.tick(n)：14 字节写入（6 字节头 + u64 tick 号）
+期间        玩家 join/chat 等事件同样追加进 buffer（二进制，无 Java 堆中转）
+tick RETURN flushBatch()：
+               finish() 盖总数 → 1 次 downcall morrow_dispatch_batch(ptr, len)
+Rust 侧：
+  1. 解析 u32 count + 逐事件（u16 type + u16 len1 + u16 len2 + payload）
+  2. 锁内快照：tick/event 回调表 + quarantine + host_api
+  3. 1 次 upcall 刷新 WorldSnapshot（v0.14，mod 查询零 upcall）
+  4. 锁外逐回调 dispatch，每个 catch_unwind；panic → quarantine
+最后        eventBuffer.reset()：close per-tick arena（内存即时归还）
 ```
 
-**延迟预算：**
-- Panama downcall: ~10ns
-- Arena allocate: ~20ns
-- Rust tick dispatch: depends on mod, target <100μs for empty mod
-- 总量目标: <1ms per tick for reasonable mod count
+**为什么快（性能定位见 design.md §零）：**
+- FFI 边界穿越：每 tick **1 次**，与 mod 数、事件数无关（O(1)）。
+- mod 扇出在 native 侧以 fn 指针完成（~1ns），不跨边界。
+- 分配：每 tick 1 个 arena；事件数据零拷贝解析。
+- 代价：事件最多延迟 1 tick（50ms）送达——MC 是 20 TPS 快照模型，免费。
+
+## 延迟预算（实测，docs/09-benchmarks.md）
+
+| 项 | 实测 |
+|---|---|
+| Panama downcall | 9.3-9.7 ns/次 |
+| 空 runtime 单 tick 派发 | 0.04 μs（占 50ms 预算的 0.00008%） |
+| 理论 TPS 上限 | ~2,300-2,700 万/秒 |
+| 运行时内存 | .so ~2.2MB + 内核 ~1KB + 每 mod ~4KB |
+
+**结论：loader 开销不是瓶颈，mod 代码才是。桥接层不再投入优化。**

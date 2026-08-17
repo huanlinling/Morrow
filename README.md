@@ -119,14 +119,17 @@ morrow/
 
 | Milestone | Status |
 |-----------|--------|
-| M0-M7: Core Platform | ✅ |
+| M0-M6: Core Platform | ✅ |
 | v0.8: Windows CI, docs, examples | ✅ |
 | v0.9: Logging system | ✅ |
 | v0.10: Mod dependency resolution | ✅ |
 | v0.11: Independent loader (Mixin) | ✅ |
 | v0.12: Java Agent + batch dispatch | ✅ |
 | v0.13: Zero-copy event parsing | ✅ |
-| v0.14: PlayerSnapshot | ⬜ Next |
+| v0.14: PlayerSnapshot | ✅ |
+| v0.15: SDK Macros + stability fixes | ✅ |
+| v0.16: Architecture hardening | ✅ |
+| M7: Benchmark Suite | ⬜ Next |
 
 ## Development
 

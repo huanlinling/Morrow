@@ -1,204 +1,86 @@
-# 03 — Runtime 生命周期
+# 03 — Runtime 生命周期（v0.16）
 
-## 状态机
+## 状态机（3 态）
 
 ```
               ┌─────────────────────────┐
-              │       UNINITIALIZED      │
-              │   Runtime 不存在          │
+              │      （Runtime 不存在）    │
               └────────────┬────────────┘
-                           │ morrow_init()
-                           │ (ABI version check)
-                           │ (Memory allocation)
+                           │ morrow_init(abi_version)
+                           │ ABI 校验 + 建 Kernel + 入全局表
                            ▼
               ┌─────────────────────────┐
-              │        INITIALIZING      │
-              │   Runtime 正在初始化       │
-              │   - Capability 注册表初始化 │
-              │   - Event bus 初始化       │
-              │   - 内部结构分配            │
+              │          Ready           │◄──────────┐
+              │  mod 加载 / tick 派发 /   │           │
+              │  命令 / Host API 全可用    │  begin_shutdown 失败
+              └────────────┬────────────┘  （非法迁移）
+                           │ morrow_shutdown()
+                           ▼
+              ┌─────────────────────────┐
+              │      ShuttingDown        │
+              │  卸 mod（dlclose）        │
               └────────────┬────────────┘
-                           │ success
+                           │ finish_shutdown()
                            ▼
               ┌─────────────────────────┐
-              │          READY           │◄──────────────┐
-              │   Runtime 就绪，等待 Mod   │               │
-              │   load                    │               │
-              └────────────┬────────────┘               │
-                           │ morrow_load_mod()           │
-                           │ (可调用多次)                  │
-                           ▼                             │
-              ┌─────────────────────────┐               │
-              │      LOADING_MOD        │               │
-              │   解析 manifest          │               │
-              │   加载 .so/.dll          │               │
-              │   调用 mod init          │               │
-              └───────┬─────────┬───────┘               │
-                      │ success │ failure                │
-                      ▼         ▼                        │
-              ┌──────────┐ ┌──────────────┐             │
-              │  READY   │ │ READY        │             │
-              │ (mod in  │ │ (error       │             │
-              │ registry)│ │  recorded)   │             │
-              └────┬─────┘ └──────┬───────┘             │
-                   │              │                      │
-                   └──────┬───────┘                      │
-                          │ server starts                 │
-                          ▼                              │
-              ┌─────────────────────────┐               │
-              │        RUNNING           │               │
-              │   - 事件分发              │               │
-              │   - tick dispatch        │               │
-              │   - mod 正常运转          │               │
-              └────────────┬────────────┘               │
-                           │                             │
-                           ▼                             │
-              ┌─────────────────────────┐               │
-              │        TICKING           │               │
-              │   morrow_tick() 调用中    │───────────────┘
-              │   - 分发 on_tick 事件     │   tick 结束
-              │   - arena 分配临时内存     │   回到 RUNNING
-              │   - catch_unwind 隔离    │
-              └───────┬─────────┬───────┘
-                      │ success │ mod panic
-                      ▼         ▼
-              ┌──────────┐ ┌──────────────────┐
-              │ RUNNING  │ │ RUNNING           │
-              │ (正常)    │ │ (mod X quarantined)│
-              └──────────┘ └──────────────────┘
-                           │
-                      server stops / crash
-                           │
-                           ▼
-              ┌─────────────────────────┐
-              │      SHUTTING_DOWN       │
-              │   - mod on_shutdown 钩子  │
-              │   - 释放所有 mod 资源     │
-              │   - 关闭 event bus       │
-              └────────────┬────────────┘
-                           │
-                           ▼
-              ┌─────────────────────────┐
-              │          DEAD            │
-              │   Runtime 已销毁          │
+              │          Dead            │
+              │  Kernel 已从全局表移除并   │
+              │  drop（所有注册表随之释放） │
               └─────────────────────────┘
 ```
 
-## Mod 生命周期 Hooks
+状态转换在 [runtime-rs/src/runtime/state.rs](../runtime-rs/src/runtime/state.rs)，
+非法迁移（重复 shutdown 等）返回错误码，不 panic。
 
-```rust
-/// Mod 必须实现的 trait
-pub trait MorrowMod: Send + Sync + 'static {
-    /// 元数据
-    fn metadata(&self) -> ModMetadata;
+## Mod 生命周期 Hooks（导出符号，非 trait）
 
-    /// ── Lifecycle Hooks ──
+Mod 通过 cdylib 导出符号被发现（design.md §1.5），SDK 宏生成：
 
-    /// Mod 被加载并初始化
-    /// 此时可以注册事件监听器、获取 capabilities
-    fn on_init(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
-        Ok(())
-    }
+| 导出符号 | 触发时机 | 签名 |
+|---------|---------|------|
+| `morrow_mod_init` | 包加载（`#[morrow::mod_main]`） | `fn(&mut Context, *const RuntimeApi) -> Result<(), MorrowError>` |
+| `morrow_mod_tick` | 每 tick | `fn(u64)` |
+| `morrow_mod_server_start` | 服务器启动完成 | `fn()` |
+| `morrow_mod_server_stop` | 服务器停机前 | `fn()` |
+| `morrow_mod_player_join` / `_leave` | 玩家进出 | `fn(&str)` |
+| `morrow_mod_chat_message` | 聊天 | `fn(&str, &str)` |
+| `morrow_mod_block_break` / `_place` | 方块破坏/放置 | `fn(&str, &str)` |
+| `morrow_mod_player_death` | 玩家死亡 | `fn(&str, &str)` |
 
-    /// 服务端启动完成，世界已加载
-    fn on_server_start(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
-        Ok(())
-    }
+加载时由 runtime 扫描符号并注册进对应注册表（lock 内，见下）。
 
-    /// 每个游戏 tick
-    /// ⚠️ 必须在 <1ms 内返回！不要在此做 IO 或复杂计算
-    fn on_tick(&mut self, ctx: &mut Context, tick: u64) -> Result<(), MorrowError> {
-        Ok(())
-    }
-
-    /// 服务端即将停止，保存数据
-    fn on_server_stop(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
-        Ok(())
-    }
-
-    /// Mod 被卸载
-    fn on_shutdown(&mut self, ctx: &mut Context) -> Result<(), MorrowError> {
-        Ok(())
-    }
-}
-```
-
-## 加载时序细节
+## 加载时序（MorrowMod.init，Mixin 在 loadWorld RETURN 触发）
 
 ```
-T=0ms    JVM 启动
-T=50ms   Fabric Loader 开始扫描 mods/
-T=100ms  Fabric 发现 MorrowHostMod (Java jar)
-T=150ms  MorrowMod.onInitialize() 被调用
+T=0      服务器 loadWorld 完成 → MinecraftServerMixin.onLoadWorld → MorrowMod.init
            │
-T=155ms    ├─ NativeLibraryLoader.load("morrow_runtime")
-           │   ├─ 检测平台: os.name="Linux", os.arch="amd64"
-           │   ├─ 搜索路径:
-           │   │   1. <jar>/natives/linux-x86_64/libmorrow_runtime.so
-           │   │   2. mods/morrow/native/linux-x86_64/libmorrow_runtime.so
-           │   │   3. 系统库路径
-           │   └─ System.load(path) → dlopen
-           │
-T=160ms    ├─ PanamaBridge.setup()
-           │   ├─ SymbolLookup.libraryLookup(path, Arena.global())
-           │   ├─ 查找所有需要的符号 (morrow_init, morrow_load_mod, ...)
-           │   └─ 创建 downcall MethodHandles
-           │
-T=165ms    ├─ morrow_init(ABI_VERSION=1)
-           │   ├─ Rust: 检查 ABI 版本
-           │   ├─ Rust: 初始化 RuntimeKernel
-           │   ├─ Rust: 返回 runtime_handle
-           │   └─ log: "[Morrow] Runtime initialized (ABI v1)"
-           │
-T=170ms    ├─ ModDiscovery.scan("mods/")
-           │   发现: mods/hello-morrow.morrow
-           │
-T=175ms    ├─ morrow_load_mod(runtime_handle, "mods/hello-morrow.morrow")
-           │   ├─ Rust: 读取 ZIP 中的 manifest.toml
-           │   ├─ Rust: 验证 api_version 兼容
-           │   ├─ Rust: 选择 artifact: linux-x86_64/libmod.so
-           │   ├─ Rust: 提取到临时目录
-           │   ├─ Rust: dlopen(libmod.so)
-           │   ├─ Rust: 查找 morrow_mod_init 符号
-           │   ├─ Rust: 调用 morrow_mod_init(ModSdkVtable)
-           │   └─ Rust: 将 mod 注册到 Registry
-           │   └─ log: "[Morrow] Loaded mod: hello-morrow v0.1.0"
-           │
-T=200ms    Fabric 初始化完成
-           │
-T=200ms+   Minecraft 启动完成，进入游戏循环
-           │
-           ├─ Tick 0: morrow_tick(runtime_handle)
-           │   └─ 分发 on_tick 到所有 mod
-           ├─ Tick 1: morrow_tick(runtime_handle)
-           │   └─ 分发 on_tick
-           ├─ ...
-           │
-           ▼  (server stop)
-T=∞       morrow_shutdown(runtime_handle)
-           ├─ Rust: 遍历所有 mod，调用 on_shutdown
-           ├─ Rust: 卸载所有动态库
-           ├─ Rust: 释放所有 handle
-           └─ Rust: RuntimeKernel 析构
+           ├─ 1. NativeLibraryLoader.load()   → libmorrow_runtime.so
+           ├─ 2. PanamaBridge.create()        → SymbolLookup + downcall handles
+           ├─ 3. morrow_init(ABI_VERSION)     → runtime_handle（版本不符 = 0，拒绝启动）
+           ├─ 4. 扫描 mods/*.morrow → 逐个 morrow_load_mod（三段式，design.md §1.4）
+           │     失败包重试一轮（依赖排序兜底）
+           ├─ 5. 绑定 morrow_dispatch_batch downcall
+           ├─ 6. morrow_dispatch_server_start
+           └─ 7. 注册 HostVtable（7 个 upcall stub）→ mod API 就绪
+```
+
+## 每 tick 数据流
+
+```
+tick HEAD    EventBuffer.tick(n)            ← 只写 buffer，不碰 FFI
+tick 期间    join/chat/block 等事件追加进 buffer
+tick RETURN  flushBatch() → morrow_dispatch_batch（1 次 downcall）
+               Rust：锁内快照回调表 → 锁外逐个 dispatch（各自 catch_unwind）
+               → panic 的 mod 进 Quarantine，后续 tick 跳过
+最后         eventBuffer.reset() → close per-tick arena
 ```
 
 ## 错误恢复策略
 
 | 错误场景 | 行为 |
 |---------|------|
-| Mod init 返回 Err | Mod 不加载，记录日志，不影响其他 mod |
-| Mod init panic | catch_unwind，mod 不加载，记录日志 |
-| Mod on_tick 返回 Err | 记录日志，继续下次 tick |
-| Mod on_tick panic | catch_unwind，隔离该 mod，其他 mod 继续 |
-| Runtime kernel panic | Runtime 进入 degraded 模式，记录错误 |
-| Native crash (SIGSEGV) | 进程级故障，JVM 可能会捕获（视 OS） |
-
-## 生命周期相关 API
-
-```rust
-// SDK 提供
-pub trait ModLifecycleExt: MorrowMod {
-    /// 注册为生命周期回调
-    fn register(self, ctx: &mut Context) -> Result<(), MorrowError>;
-}
-```
+| Mod init 返回 Err / panic | Mod 不加载，记录日志，不影响其他 mod |
+| Mod 回调 panic（tick/事件/命令） | catch_unwind 隔离，mod 进 Quarantine，服务器继续 |
+| Runtime 入口 panic | `ffi_boundary` 兜底——绝不 unwind 穿 FFI 边界 |
+| Native crash (SIGSEGV) | 进程级故障，无恢复（Layer 1/2 的设计目标就是永不走到这层） |
+| 重复 shutdown / 非法状态迁移 | 返回错误码，不 panic |

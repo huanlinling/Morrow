@@ -15,7 +15,7 @@ Minecraft 模组生态已经发展了十多年，几乎所有模组都是用 Jav
 | 独立 native mod | 无法与 Java mod 通信、需要自研 loader |
 | 纯 Rust 重写 Minecraft | 不现实、生态为零 |
 
-Morrow 走一条中间路线：**Rust 写 Mod，Panama 做桥，Fabric 做宿主。**
+Morrow 走一条中间路线：**Rust 写 Mod，Panama 做桥，Mixin 注入（v0.12 起独立于 Fabric）。**
 
 ## 核心设计原则
 
@@ -36,7 +36,7 @@ Morrow 走一条中间路线：**Rust 写 Mod，Panama 做桥，Fabric 做宿主
 
 ## 非目标（明确说不做）
 
-- **替代 Fabric/Forge** — Morrow 是 Platform，不是 Loader
+- **提供 Fabric API 兼容层** — Morrow 是独立 Loader + Platform，但不复刻 Fabric API 生态
 - **100% Rust 重写 MC** — 不现实也不需要
 - **自动 Java → Rust 翻译** — 不做，也不推荐
 - **Web UI / 管理面板** — 不属于 Runtime 范畴

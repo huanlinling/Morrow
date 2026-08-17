@@ -5,7 +5,7 @@
 ```rust
 /// Morrow ABI version — 每次不兼容变更递增主版本
 /// 兼容变更（新增函数）递增次版本
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 0x0001_0000; // 主版本 1，次版本 0
 
 /// ABI 兼容性检查
 /// - 同主版本 = 兼容
@@ -27,17 +27,12 @@ pub fn is_abi_compatible(requested: u32, actual: u32) -> bool {
  * 初始化 Morrow Runtime
  *
  * @param abi_version   调用者请求的 ABI 版本
- * @param config_ptr    指向配置 JSON 的指针（UTF-8, null-terminated）
- * @param config_len    配置数据长度（字节）
- * @return              runtime_handle (u64), 0 表示初始化失败
+ * @return              runtime_handle (u64), 0 表示初始化失败（版本不兼容）
  *
- * 调用时机：JVM 启动后，Fabric 初始化完成时
+ * 调用时机：服务器 loadWorld 完成时（MinecraftServerMixin）
  * 线程安全：应在主线程调用一次
- * 错误处理：失败返回 0，错误信息通过 morrow_last_error 获取
  */
-uint64_t morrow_init(uint32_t abi_version,
-                     uint64_t config_ptr,
-                     uint32_t config_len);
+uint64_t morrow_init(uint32_t abi_version);
 
 /**
  * 关闭 Morrow Runtime
@@ -58,81 +53,85 @@ uint32_t morrow_shutdown(uint64_t runtime_handle);
  * 加载一个 .morrow 包
  *
  * @param runtime_handle
- * @param package_path     .morrow 文件的文件系统路径（UTF-8）
- * @param path_len          路径长度
- * @return                 mod_handle (u64), 0 表示加载失败
+ * @param path_ptr         包文件系统路径（UTF-8, pointer+length）
+ * @param path_len         路径长度
+ * @return                 0 成功，非零错误码（详见 error channel）
  *
- * 行为：
- * 1. 解析 manifest.toml
- * 2. 验证 ABI 兼容性
- * 3. 选择平台 artifact
- * 4. 加载动态库
- * 5. 调用 mod entry point
- * 6. 注册到 mod registry
+ * 行为（三段式，见 design.md §1.4）：
+ * A. 锁内解析 manifest、校验依赖
+ * B. 无锁提取 + dlopen + 调 mod entry point（mod 可重入 API）
+ * C. 锁内注册 mod 与回调符号
  */
-uint64_t morrow_load_mod(uint64_t runtime_handle,
-                          uint64_t package_path,
-                          uint32_t path_len);
+uint32_t morrow_load_mod(uint64_t runtime_handle,
+                         uint64_t path_ptr,
+                         uint32_t path_len);
 
-/**
- * 卸载一个 mod
- *
- * @param runtime_handle
- * @param mod_handle       morrow_load_mod 返回的 handle
- * @return                 0 成功
- */
-uint32_t morrow_unload_mod(uint64_t runtime_handle,
-                            uint64_t mod_handle);
+// 无 morrow_unload_mod：卸载仅随 morrow_shutdown 整 runtime 释放
+// （单独卸载涉及 dlclose 语义与跨 mod 引用，v2 再评估）
 ```
 
-### Event Dispatch
+### Event Dispatch（批量派发，v0.12+ 生产路径）
 
 ```c
 /**
- * 分发事件到所有注册的 mod
+ * 分发一整 tick 的事件批次（1 次 FFM 调用/tick）
  *
  * @param runtime_handle
- * @param event_type      事件类型名称（UTF-8, 如 "server.tick"）
- * @param type_len        类型名长度
- * @param event_data      事件数据（JSON 或二进制）
- * @param data_len        数据长度
- * @return                处理该事件的 mod 数量
+ * @param data_ptr     off-heap 事件缓冲（Java EventBuffer 写入）
+ * @param data_len     缓冲字节数
  *
- * 线程安全：可从 Java 事件线程调用
+ * 调用时机：每个 game tick 结束时（Mixin tick RETURN）
+ * 缓冲格式见下方"事件类型码"规范表
  */
-uint32_t morrow_dispatch_event(uint64_t runtime_handle,
-                                uint64_t event_type,
-                                uint32_t type_len,
-                                uint64_t event_data,
-                                uint32_t data_len);
-
-/**
- * 注册 Java 端事件回调（用于 Rust → Java 通信）
- *
- * @param runtime_handle
- * @param event_type      事件类型名称
- * @param type_len
- * @param callback_addr    upcall stub 的内存地址
- * @return                 0 成功
- */
-uint32_t morrow_register_upcall(uint64_t runtime_handle,
-                                 uint64_t event_type,
-                                 uint32_t type_len,
-                                 uint64_t callback_addr);
+void morrow_dispatch_batch(uint64_t runtime_handle,
+                           uint64_t data_ptr,
+                           uint32_t data_len);
 ```
+
+### 事件类型码（规范表 —— 单一事实源）
+
+批量缓冲的 wire format：
+
+```
+u32le: total_events
+for each:
+  u16le: event_type   ← 见下表
+  u16le: field1_len
+  u16le: field2_len
+  field1 bytes
+  field2 bytes (may be empty)
+```
+
+tick 事件的 8 字节 tick 号直接放在 6 字节头之后（field1/2 为空）。
+
+| Code | 事件 | field1 | field2 |
+|------|------|--------|--------|
+| 0 | tick | （空，头后跟 u64 tick 号） | （空） |
+| 1 | player_join | 玩家名 | （空） |
+| 2 | player_leave | 玩家名 | （空） |
+| 3 | chat_message | 玩家名 | 消息 |
+| 4 | block_break | 玩家名 | 方块 |
+| 5 | block_place | 玩家名 | 方块 |
+| 6 | player_death | 玩家名 | （空，cause 传 null） |
+
+**同步义务**：此表是唯一权威。Java 侧写入（`bridge-java` EventBuffer）由
+`EventBufferCodeTest` 钉住，Rust 侧解析由
+`runtime-rs/tests/mod_loader_integration.rs` 钉住。改任何一侧都要改此表，
+否则对应测试失败。
 
 ### Tick
 
 ```c
 /**
- * 驱动 mod 的 on_tick 回调
+ * 驱动 mod 的 on_tick 回调（legacy 单事件入口，测试用）
  *
  * @param runtime_handle
+ * @param tick_number     tick 序号
  *
  * 调用时机：每个 game tick（20 TPS）
- * 性能要求：必须在 <1ms 内返回
+ * 生产路径走 morrow_dispatch_batch（见上），此入口保留给 Java 桥接测试
  */
-void morrow_tick(uint64_t runtime_handle);
+void morrow_tick(uint64_t runtime_handle, uint64_t tick_number);
 ```
 
 ### Error Channel
@@ -150,33 +149,18 @@ uint64_t morrow_last_error(uint64_t runtime_handle);
  * 获取错误消息
  *
  * @param error_handle     morrow_last_error 返回的 handle
+ * @param runtime_handle
  * @param buffer           输出缓冲区（调用者分配）
  * @param buffer_cap       缓冲区容量
  * @return                 实际写入的字节数（不含 null terminator）
  */
 uint32_t morrow_error_message(uint64_t error_handle,
+                               uint64_t runtime_handle,
                                uint64_t buffer,
                                uint32_t buffer_cap);
 
-/**
- * 释放 error handle
- *
- * @param error_handle
- */
-void morrow_error_free(uint64_t error_handle);
-```
-
-### 资源管理
-
-```c
-/**
- * 释放 handle（通用的 handle 析构）
- *
- * @param handle   任何由 Morrow 分配的 handle
- *
- * 注意：runtime_handle 不通过此函数释放（使用 morrow_shutdown）
- */
-void morrow_handle_free(uint64_t handle);
+// 无 morrow_error_free / morrow_handle_free：error 记录被读取即消费
+// （take 语义），handle 失效由 remove 触发释放
 ```
 
 ## 数据结构约定
@@ -221,6 +205,20 @@ pub struct FVec3 {
 - 仅 `#[repr(C)]` struct 可跨 FFI 传递
 - 所有字段类型必须是 FFI-safe（`i32`, `u64`, `f64`, `*const T` 等）
 - 不允许：`String`, `Vec`, `Box<dyn Trait>`, `HashMap` 等非 FFI-safe 类型
+
+### 所有权规则
+
+**allocator 不跨边界**：谁分配谁释放。完整矩阵：
+
+| 数据 | 分配方 | 释放方 | 机制 |
+|------|--------|--------|------|
+| Runtime state | Rust | Rust (`morrow_shutdown`) | Rust ownership |
+| Mod 实例（dlopen 的库） | Rust | Rust (`morrow_shutdown`) | Rust ownership |
+| 事件批量数据 | Java EventBuffer | Java (`reset()` close arena) | per-tick `Arena.ofConfined()` |
+| 字符串 (Java → Rust) | Java | Java（arena close 或 GC） | Rust 只读借用，调用期间有效 |
+| 字符串 (Rust → Java，upcall) | Rust | Rust | Java 在 upcall 返回前读完（`toArray`），不得留存指针 |
+| 缓冲区 (Rust 写回 Java) | Java 调用者 | Java | Rust 只写、只读长度上限，绝不扩容 |
+| Opaque handles | Rust | Rust | Arc 注册表，remove 即失效，悬空返回错误非 UB |
 
 ## ABI 稳定性保证
 
