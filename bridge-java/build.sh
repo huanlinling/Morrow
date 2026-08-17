@@ -19,8 +19,10 @@ rm -rf "$OUT_DIR"
 javac --release 21 --enable-preview \
     -d "$OUT_DIR" \
     src/main/java/com/morrow/host/PanamaBridge.java \
+    src/main/java/com/morrow/host/EventBuffer.java \
     src/test/java/com/morrow/host/M0_AddTest.java \
     src/test/java/com/morrow/host/M1_LifecycleTest.java \
+    src/test/java/com/morrow/host/EventBufferCodeTest.java \
     src/test/java/com/morrow/host/Benchmark.java
 echo "    Java compile OK."
 
@@ -37,7 +39,13 @@ java --enable-preview --enable-native-access=ALL-UNNAMED \
     com.morrow.host.M1_LifecycleTest
 
 echo ""
-echo "==> Step 5: Performance Benchmarks..."
+echo "==> Step 5: Event Code Parity Test..."
+java --enable-preview --enable-native-access=ALL-UNNAMED \
+    -cp "$OUT_DIR" \
+    com.morrow.host.EventBufferCodeTest
+
+echo ""
+echo "==> Step 6: Performance Benchmarks..."
 # Use a smaller iteration count for CI, larger for manual runs
 BENCH_ITERS=${FERUM_BENCH_ITERS:-100000}
 java --enable-preview --enable-native-access=ALL-UNNAMED \

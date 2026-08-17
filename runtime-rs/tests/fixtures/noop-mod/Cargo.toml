@@ -1,0 +1,11 @@
+[package]
+name = "noop-mod"
+version = "0.1.0"
+edition = "2021"
+description = "M7 scalability fixture — a mod that does nothing (silent tick handler)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+morrow = { path = "../../../../sdk-rs" }

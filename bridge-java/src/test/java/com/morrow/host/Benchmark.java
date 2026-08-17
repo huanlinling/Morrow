@@ -32,6 +32,7 @@ public class Benchmark {
 
         benchDowncallLatency(bridge);
         benchTickDispatch(bridge);
+        benchBatchDispatch(bridge);
 
         System.out.println("=== Done ===");
     }
@@ -121,5 +122,68 @@ public class Benchmark {
         // Shutdown
         int status = (int) shutdown.invokeExact(handle);
         if (status != 0) System.err.println("  WARN: shutdown returned " + status);
+    }
+
+    // ─── 3. Batch dispatch (production path) ────
+
+    /**
+     * M7: full production tick loop — EventBuffer write → finish →
+     * {@code morrow_dispatch_batch} → parse, per-tick arena churn
+     * included (reset closes the arena each iteration, same as the
+     * real host).
+     */
+    private static void benchBatchDispatch(PanamaBridge bridge) throws Throwable {
+        System.out.println("--- Batch Dispatch (EventBuffer → dispatch_batch) ---");
+
+        MethodHandle init = bridge.downcall("morrow_init",
+                FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+        MethodHandle batch = bridge.downcall("morrow_dispatch_batch",
+                FunctionDescriptor.ofVoid(
+                        ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+        MethodHandle shutdown = bridge.downcall("morrow_shutdown",
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG));
+
+        long handle = (long) init.invokeExact(PanamaBridge.ABI_VERSION);
+        if (handle == 0) {
+            System.err.println("  ERROR: morrow_init failed");
+            return;
+        }
+
+        int ticks = 100_000;
+        // 1 = tick only; 8 = tick + 7 chat events
+        for (int eventsPerTick : new int[]{1, 8}) {
+            EventBuffer buf = new EventBuffer();
+
+            for (int i = 0; i < 1000; i++) {
+                fillBatch(buf, eventsPerTick, i);
+                batch.invokeExact(handle, buf.finish(), buf.size());
+                buf.reset();
+            }
+
+            long start = System.nanoTime();
+            for (int i = 0; i < ticks; i++) {
+                fillBatch(buf, eventsPerTick, i);
+                batch.invokeExact(handle, buf.finish(), buf.size());
+                buf.reset();
+            }
+            long elapsed = System.nanoTime() - start;
+
+            double avgUs = (double) elapsed / ticks / 1000.0;
+            System.out.printf("  %d event(s)/tick: %,d ticks, %.2f ms, "
+                            + "avg %.3f μs/tick, %.1f ns/event%n",
+                    eventsPerTick, ticks, elapsed / 1_000_000.0, avgUs,
+                    elapsed / (double) ticks / eventsPerTick);
+        }
+
+        int status = (int) shutdown.invokeExact(handle);
+        if (status != 0) System.err.println("  WARN: shutdown returned " + status);
+        System.out.println();
+    }
+
+    private static void fillBatch(EventBuffer buf, int eventsPerTick, long tick) {
+        buf.tick(tick);
+        for (int j = 1; j < eventsPerTick; j++) {
+            buf.chat("player" + j, "msg" + j);
+        }
     }
 }

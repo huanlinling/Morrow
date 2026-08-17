@@ -55,6 +55,16 @@ fn on_chat(player: &str, msg: &str) {
     morrow::info!("chat:{}:{}", player, msg);
 }
 
+#[morrow::event(block_break)]
+fn on_block_break(player: &str, block: &str) {
+    morrow::info!("break:{}:{}", player, block);
+}
+
+#[morrow::event(block_place)]
+fn on_block_place(player: &str, block: &str) {
+    morrow::info!("place:{}:{}", player, block);
+}
+
 #[morrow::event(player_death)]
 fn on_death(player: &str, cause: &str) {
     morrow::info!("death:{}:{}", player, cause);

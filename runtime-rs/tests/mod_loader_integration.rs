@@ -110,9 +110,16 @@ fn sent_contains(s: &str) -> bool {
 }
 
 /// Batch payload in the Java `EventBuffer` wire format.
-/// - tick: type=0, empty fields, 8-byte tick number
-/// - join: type=1, field1 = player name
-/// - chat: type=3, field1 = player, field2 = message
+///
+/// Event type codes must stay in sync with the canonical table in
+/// docs/02-abi-design.md §事件类型码 — the Java writer is pinned to the
+/// same table by `bridge-java` EventBufferCodeTest. This test pins the
+/// Rust parser side.
+/// - tick:  type=0, 8-byte tick number after the header
+/// - join/leave: type=1/2, field1 = player name
+/// - chat:  type=3, field1 = player, field2 = message
+/// - break/place: type=4/5, field1 = player, field2 = block
+/// - death: type=6, field1 = player
 fn build_batch(events: &[BatchEvent]) -> Vec<u8> {
     let mut data = Vec::new();
     data.extend_from_slice(&(events.len() as u32).to_le_bytes());
@@ -157,6 +164,38 @@ fn chat_event(player: &str, msg: &str) -> BatchEvent {
     }
 }
 
+fn leave_event(player: &str) -> BatchEvent {
+    BatchEvent {
+        kind: 2,
+        f1: player.as_bytes().to_vec(),
+        f2: Vec::new(),
+    }
+}
+
+fn break_event(player: &str, block: &str) -> BatchEvent {
+    BatchEvent {
+        kind: 4,
+        f1: player.as_bytes().to_vec(),
+        f2: block.as_bytes().to_vec(),
+    }
+}
+
+fn place_event(player: &str, block: &str) -> BatchEvent {
+    BatchEvent {
+        kind: 5,
+        f1: player.as_bytes().to_vec(),
+        f2: block.as_bytes().to_vec(),
+    }
+}
+
+fn death_event(player: &str) -> BatchEvent {
+    BatchEvent {
+        kind: 6,
+        f1: player.as_bytes().to_vec(),
+        f2: Vec::new(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The full cycle
 // ---------------------------------------------------------------------------
@@ -196,12 +235,25 @@ fn full_load_dispatch_cycle() {
     morrow_dispatch_server_start(handle);
     assert!(log_contains("[testmod] server-start"));
 
-    // Batch dispatch: tick 42 + player join alice + chat
-    let batch = build_batch(&[tick_event(42), join_event("alice"), chat_event("bob", "hi")]);
+    // Batch dispatch: all 7 event kinds in canonical code order — each
+    // must route to exactly the right handler.
+    let batch = build_batch(&[
+        tick_event(42),
+        join_event("alice"),
+        leave_event("dave"),
+        chat_event("bob", "hi"),
+        break_event("carol", "stone"),
+        place_event("carol", "dirt"),
+        death_event("erin"),
+    ]);
     morrow_dispatch_batch(handle, batch.as_ptr(), batch.len() as u32);
     assert!(log_contains("[testmod] tick-42"));
     assert!(log_contains("[testmod] join:alice"));
+    assert!(log_contains("[testmod] leave:dave"));
     assert!(log_contains("[testmod] chat:bob:hi"));
+    assert!(log_contains("[testmod] break:carol:stone"));
+    assert!(log_contains("[testmod] place:carol:dirt"));
+    assert!(log_contains("[testmod] death:erin:"));
 
     // Unknown tick (not 42) must not fire the handler
     let batch2 = build_batch(&[tick_event(1)]);
