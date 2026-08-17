@@ -2,6 +2,45 @@ plugins {
     id 'fabric-loom' version "${fabric_loom_version}"
 }
 
+// ── Standalone agent packaging ──────────────────────────────────────────
+// The production entry is `java -javaagent:morrow.jar -jar server.jar`
+// with no Fabric Loader. The agent classloader only sees the top level
+// of the agent jar, so Mixin + ASM must be MERGED in (loom's `include`
+// nests jars, which would not load). Guava and Gson are deliberately
+// excluded — the vanilla server jar provides both (bundling would put
+// duplicate classes on the app classpath).
+configurations {
+    agent
+}
+
+dependencies {
+    agent("net.fabricmc:sponge-mixin:${project.mixin_version}") {
+        exclude group: 'com.google.guava'
+        exclude group: 'com.google.code.gson'
+    }
+}
+
+tasks.register('agentJar', Jar) {
+    dependsOn tasks.named('jar')
+    archiveClassifier = 'agent'
+    from(zipTree(tasks.named('jar').flatMap { it.archiveFile }))
+    from(configurations.agent.collect { zipTree(it) })
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/MANIFEST.MF'
+    manifest {
+        attributes(
+            'Premain-Class': 'com.morrow.agent.MorrowAgent',
+            'Agent-Class': 'com.morrow.agent.MorrowAgent',
+            'Can-Redefine-Classes': 'true',
+            'Can-Retransform-Classes': 'true'
+        )
+    }
+}
+
+tasks.named('build') {
+    dependsOn tasks.named('agentJar')
+}
+
 group = project.maven_group
 version = project.mod_version
 base { archivesName = project.archives_base_name }

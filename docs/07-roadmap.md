@@ -293,11 +293,17 @@ Memory:
 
 ### 已知缺口（待排期，非 M7 范围）
 
-- **独立 agent 模式缺 Mixin fat-jar 打包**：`morrow-host-0.1.0.jar` 内 0 个
-  Mixin 类（`modImplementation` 不打包），`java -javaagent:morrow.jar` 纯
-  独立路径会 ClassNotFound——M6 验证实际走的 loom runServer（Fabric 提供
-  Mixin）。修法：shadow/fat-jar 合并 `org.spongepowered:mixin`。决策：
-  保留独立 loader 定位，修复排期另行决定（2026-08-17 会话结论）。
+- **独立 agent 模式不完整**（2026-08-17 调查结论，分两层）：
+  1. ~~Mixin 未打包~~ → 已修：`agentJar` 任务 fat-jar 合并
+     `net.fabricmc:sponge-mixin` + ASM（排除 guava/gson，vanilla server.jar
+     自带），premain 已能加载 Mixin 类。
+  2. **Fabric fork 的 mixin 不含 vanilla host service**：service 文件只列了
+     LaunchWrapper 和 ModLauncher 两个 bootstrap，纯 agent 模式下
+     `MixinBootstrap.init()` 抛 `ServiceNotAvailableError`——即使对着真实
+     vanilla 服务器也一样。修法：自研 `IMixinService` +
+     `IMixinServiceBootstrap`（经 Instrumentation 驱动类转换，SpongeVanilla
+     / Carpet 同款模式，~200 行）+ 真实服务器端到端验证。这是独立里程碑级
+     工作量，非打包问题。决策：保留独立 loader 定位，此缺口单独排期。
 
 ---
 
