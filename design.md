@@ -36,7 +36,8 @@
    开销与 mod 数量、事件数量无关。mod 扇出在 native 侧以 fn 指针完成（~1ns），
    分配收敛为每 tick 一个 confined arena（无 Java 堆往返、无 GC 压力）。
    对比逐事件 FFI（O(事件×mod) 次穿越 + 每事件分配），批量把穿越**次数**优化
-   ~1000 倍，而 Panama vs JNI 只是把**单价**优化 ~3 倍——次数是杠杆，单价不是。
+   ~1000 倍；而单价（Panama vs JNI）在 JDK 21 实测已无差距（7.0 vs 7.2ns，
+   M7 实测）——次数是杠杆，单价从来不是。
 3. **性能已到终点**：空 tick 派发实测 0.04μs，占 Minecraft 50ms tick 预算的
    0.00008%。loader 开销不是瓶颈，mod 代码才是。桥接层不再投入优化——M7
    基准的性质是**验收**（向外部证明承诺），不是**研究**（找瓶颈）。
@@ -53,14 +54,17 @@ Minecraft 本身就是 20 TPS 快照模型，此延迟无人感知；若未来�
 
 | 维度 | JNI | Panama FFM |
 |------|-----|------------|
-| 调用开销 | ~20-30ns | ~5-10ns（inline 可达 0） |
+| 调用开销（trivial call，JDK 21 实测） | 7.2ns | 7.0ns（两者都到下限，M7 实测） |
 | 内存管理 | 手动 GlobalRef/LocalRef 管理 | Arena 作用域管理，自动释放 |
 | 类型安全 | JNI 类型系统老旧 | ValueLayout 类型安全 |
 | 代码量 | Java + C glue code | 纯 Java，直接 downcall |
 | 运行时 | 需要加载 JNI 库 | JDK 内置，无需额外 Runtime |
 | 未来 | 遗留 API | JDK 官方主推方向 |
 
-**结论：Panama 是现代 JDK 的 native 互操作标准答案。Morrow 全栈使用 Panama FFM API。**
+**结论：Panama 是现代 JDK 的 native 互操作标准答案。Morrow 全栈使用
+Panama FFM API。** 注意：选 Panama 的理由是生命周期/类型安全/无 glue
+code，不是调用单价——单价两者已打平（M7 实测纠正了早期"JNI 慢 2-3 倍"
+的假设）。Morrow 的性能也不依赖单价，依赖批量派发（§零）。
 
 ### 1.2 批量派发：1 次 FFI/tick
 

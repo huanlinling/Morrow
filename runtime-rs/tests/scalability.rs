@@ -114,3 +114,62 @@ fn dispatch_scales_linearly_with_mod_count() {
         "50 mods must stay under 2ms/tick: {t50:.3}"
     );
 }
+
+// ─── M7 7.3: memory footprint ─────────────────────────────────────
+
+/// Resident set size in KiB, from /proc/self/status (Linux only).
+fn rss_kib() -> u64 {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    for line in status.lines() {
+        if let Some(v) = line.strip_prefix("VmRSS:") {
+            return v.trim().trim_end_matches(" kB").trim().parse().unwrap_or(0);
+        }
+    }
+    0
+}
+
+/// Bounds the runtime's memory footprint: baseline → init → 50 mods →
+/// shutdown. Assertions are leak guards (generous for CI noise), not
+/// certification — the real numbers feed docs/09-benchmarks.md.
+#[test]
+#[cfg(target_os = "linux")]
+fn memory_footprint_stays_bounded() {
+    use morrow_runtime::*;
+
+    let base = rss_kib();
+
+    let handle = morrow_init(ABI_VERSION);
+    assert_ne!(handle, 0, "runtime init must return a valid handle");
+    let after_init = rss_kib();
+
+    let tmp = tempfile::tempdir().unwrap();
+    for i in 0..50 {
+        let pkg = package_noop(tmp.path(), &format!("mem{i}"));
+        let path = pkg.to_str().unwrap();
+        assert_eq!(
+            morrow_load_mod(handle, path.as_ptr(), path.len() as u32),
+            0,
+            "loading mem{i} must succeed"
+        );
+    }
+    let after_mods = rss_kib();
+
+    assert_eq!(morrow_shutdown(handle), 0, "shutdown must succeed");
+    let after_shutdown = rss_kib();
+
+    let runtime_cost = after_init.saturating_sub(base);
+    let mods_cost = after_mods.saturating_sub(after_init);
+    let residue = after_shutdown.saturating_sub(base);
+    println!(
+        "RSS: base {base} KiB | runtime +{runtime_cost} KiB | 50 mods +{mods_cost} KiB \
+         ({mods_cost_kib} KiB/mod) | post-shutdown residue {residue} KiB",
+        mods_cost_kib = mods_cost / 50
+    );
+
+    // Leak guards — order-of-magnitude headroom over the observed values.
+    assert!(runtime_cost < 20 * 1024, "runtime must stay under 20 MiB: {runtime_cost} KiB");
+    assert!(mods_cost < 50 * 1024, "50 mods must stay under 50 MiB: {mods_cost} KiB");
+    // dlclose unmaps mod libraries; allocator caches may retain some
+    // pages, so the residue bound is looser than the others.
+    assert!(residue < 30 * 1024, "post-shutdown residue must stay under 30 MiB: {residue} KiB");
+}

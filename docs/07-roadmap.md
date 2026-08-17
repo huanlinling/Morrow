@@ -263,9 +263,9 @@ M7 的目的是用数据向外部证明承诺、锁定回归基线——不是�
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 7.1 | JNI vs Panama FFM 对比 benchmark（文档化"单价"差距，已知 ~2-3x） | ⬜ |
+| 7.1 | JNI vs Panama FFM 对比 benchmark（文档化"单价"差距，已知 ~2-3x） | ✅ 实测打平 7.2 vs 7.0ns，纠正早期假设 |
 | 7.2 | Tick 全链路测量：EventBuffer 写入 → finish → dispatch_batch → 解析 → 派发 | ✅ 0.393μs/tick（1 事件），0.617μs（8 事件） |
-| 7.3 | Memory footprint 测量（运行时基线 + 每 mod 增量 + 每 tick arena 峰值） | ⬜ |
+| 7.3 | Memory footprint 测量（运行时基线 + 每 mod 增量 + 每 tick arena 峰值） | ✅ runtime +144KiB，每 mod ~299KiB，shutdown 残留 ~1.5MiB |
 | 7.4 | Event dispatch latency 测量（每事件类型，含/不含 catch_unwind） | ✅ 边际 77ns/事件（批量内） |
 | 7.5 | 多 mod 扩展性测试（1/10/50 个 no-op mod，验证 O(1) 派发与 mod 数无关） | ✅ 1.399μs@50mods；scalability.rs 进 CI 防二次爆炸 |
 | 7.6 | 结果写入 docs/09-benchmarks.md，作为后续性能回归基线 | ✅ |
@@ -274,7 +274,8 @@ M7 的目的是用数据向外部证明承诺、锁定回归基线——不是�
 
 ```
 Panama vs JNI:
-  call latency:  Panama ~9ns vs JNI 20-30ns（确认数量级即可）
+  call latency:  实测 7.0 vs 7.2ns（JDK 21 trivial call 两者打平；
+  早前"JNI 慢 2-3 倍"的假设不成立，已纠正）
 
 Tick 全链路（空 runtime，1 事件）:
   < 1μs/tick（预算 50ms 的 0.002%）

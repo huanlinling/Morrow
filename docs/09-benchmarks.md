@@ -61,6 +61,39 @@ Growth is ~linear (5× mods → 6.4× cost; the fixed per-batch overhead of
 ~0.1 μs accounts for the slight tilt). Guarded in CI by
 `runtime-rs/tests/scalability.rs` (quadratic-blowup assertion).
 
+## Memory Footprint (M7)
+
+RSS deltas via /proc/self/status, release build, 50 no-op mods loaded
+through the real loader (`runtime-rs/tests/scalability.rs`, Linux):
+
+| Phase | RSS delta |
+|-------|-----------|
+| Runtime init | **+144 KiB** |
+| Per loaded mod (×50) | **~299 KiB/mod** |
+| Post-shutdown residue | ~1.5 MiB (allocator caches; dlclose unmaps mod libs) |
+
+Acceptance (docs/07 M7): runtime base < 2 MB, per mod < 1 MB — passed.
+Note: the ~299 KiB/mod is dominated by the mod library's mapped pages
+(~412 KB file, lazily paged); registry overhead per mod is ~4 KB as
+previously stated. The earlier "2.2 MB runtime" figure was the .so file
+size on disk — resident memory after init is far smaller.
+
+## JNI vs Panama Downcall (M7 7.1)
+
+Same trivial call shape (`add(i32, i32) -> i32`), same process, 1M
+iterations, JDK 21:
+
+| Mechanism | Avg latency |
+|-----------|-------------|
+| JNI | **7.2 ns/call** |
+| Panama FFM | **7.0 ns/call** (1.02×) |
+
+Correction to earlier assumptions: on JDK 21 a trivial JNI call is NOT
+2-3× slower — both mechanisms sit at the JVM's native-call floor. Panama's
+real advantages are lifecycle (arena vs GlobalRef), type safety, and no
+glue code — plus the batch dispatch architecture, which is where Morrow's
+performance actually comes from (design.md §零: 次数是杠杆，单价不是).
+
 ## Mod Load Overhead
 
 | Metric | Value |
@@ -71,11 +104,14 @@ Growth is ~linear (5× mods → 6.4× cost; the fixed per-batch overhead of
 
 ## Memory Baseline
 
+On-disk / registry figures (resident memory measured below in
+"Memory Footprint (M7)"):
+
 | Component | Approx Size |
 |-----------|-------------|
-| libmorrow_runtime.so | ~2.2 MB (release, stripped) |
+| libmorrow_runtime.so | ~2.2 MB (release, stripped, on disk) |
 | Runtime kernel (idle) | ~1 KB (single handle entry) |
-| Per loaded mod | ~4 KB (registry entry + metadata) |
+| Per loaded mod | ~4 KB (registry entry + metadata; the mapped mod .so is extra) |
 
 ## Conclusion
 
@@ -89,5 +125,5 @@ The Panama FFM bridge delivers on the "native performance" promise:
 
 **Performance line is at its ceiling** (design.md §零): loader overhead is
 0.00008% of the tick budget; the benchmark suite is acceptance-grade, not
-research-grade. Remaining M7 items: JNI comparison (7.1) and memory
-footprint measurement (7.3).
+research-grade. M7 complete: all six items measured, guarded in CI, and
+documented here as the regression baseline.

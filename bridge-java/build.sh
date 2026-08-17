@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="$SCRIPT_DIR/out"
 
+# JAVA_HOME for JNI headers (M7 7.1); derive from javac when unset
+JAVA_HOME=${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")}
+
 echo "==> Step 1: Build Rust runtime..."
 cd "$PROJECT_ROOT"
 cargo build --release
@@ -23,8 +26,17 @@ javac --release 21 --enable-preview \
     src/test/java/com/morrow/host/M0_AddTest.java \
     src/test/java/com/morrow/host/M1_LifecycleTest.java \
     src/test/java/com/morrow/host/EventBufferCodeTest.java \
+    src/test/java/com/morrow/host/JniBench.java \
     src/test/java/com/morrow/host/Benchmark.java
 echo "    Java compile OK."
+
+echo ""
+echo "==> Step 2b: Compile JNI baseline (libjnibench.so)..."
+gcc -shared -fPIC \
+    -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+    -o "$OUT_DIR/libjnibench.so" \
+    src/test/native/jni_bench.c
+echo "    JNI compile OK."
 
 echo ""
 echo "==> Step 3: M0 Regression Test..."
@@ -51,6 +63,13 @@ BENCH_ITERS=${FERUM_BENCH_ITERS:-100000}
 java --enable-preview --enable-native-access=ALL-UNNAMED \
     -cp "$OUT_DIR" \
     com.morrow.host.Benchmark
+
+echo ""
+echo "==> Step 7: JNI vs Panama Comparison (M7 7.1)..."
+java --enable-preview --enable-native-access=ALL-UNNAMED \
+    -Djava.library.path="$OUT_DIR" \
+    -cp "$OUT_DIR" \
+    com.morrow.host.JniBench
 
 echo ""
 echo "==> All tests passed."
