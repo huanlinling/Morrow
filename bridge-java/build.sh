@@ -72,4 +72,21 @@ java --enable-preview --enable-native-access=ALL-UNNAMED \
     com.morrow.host.JniBench
 
 echo ""
+echo "==> Step 8: Agent premain smoke (standalone Mixin bootstrap)..."
+AGENT_JAR="build/libs/morrow-host-0.1.0-agent.jar"
+if [ ! -f "$AGENT_JAR" ]; then
+    ./gradlew --no-daemon -q agentJar
+fi
+AGENT_OUT=$(java --enable-preview -javaagent:"$AGENT_JAR" -version 2>&1)
+if ! echo "$AGENT_OUT" | grep -q "Mixin initialized"; then
+    echo "    ❌ FAILED: premain did not initialize Mixin:"; echo "$AGENT_OUT"
+    exit 1
+fi
+if echo "$AGENT_OUT" | grep -q "ServiceNotAvailableError"; then
+    echo "    ❌ FAILED: no mixin host service selected:"; echo "$AGENT_OUT"
+    exit 1
+fi
+echo "    ✅ Agent premain boots Mixin standalone (no Fabric)."
+
+echo ""
 echo "==> All tests passed."

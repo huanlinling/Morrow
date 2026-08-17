@@ -291,19 +291,18 @@ Memory:
   per mod:       < 1MB (empty mod)
 ```
 
-### 已知缺口（待排期，非 M7 范围）
+### 已知缺口（2026-08-17 调查与修复记录）
 
-- **独立 agent 模式不完整**（2026-08-17 调查结论，分两层）：
-  1. ~~Mixin 未打包~~ → 已修：`agentJar` 任务 fat-jar 合并
-     `net.fabricmc:sponge-mixin` + ASM（排除 guava/gson，vanilla server.jar
-     自带），premain 已能加载 Mixin 类。
-  2. **Fabric fork 的 mixin 不含 vanilla host service**：service 文件只列了
-     LaunchWrapper 和 ModLauncher 两个 bootstrap，纯 agent 模式下
-     `MixinBootstrap.init()` 抛 `ServiceNotAvailableError`——即使对着真实
-     vanilla 服务器也一样。修法：自研 `IMixinService` +
-     `IMixinServiceBootstrap`（经 Instrumentation 驱动类转换，SpongeVanilla
-     / Carpet 同款模式，~200 行）+ 真实服务器端到端验证。这是独立里程碑级
-     工作量，非打包问题。决策：保留独立 loader 定位，此缺口单独排期。
+**独立 agent 模式**（`java -javaagent:morrow.jar -jar server.jar`，无 Fabric）：
+
+| 层 | 缺口 | 状态 |
+|----|------|------|
+| 打包 | Mixin 类未进 agent jar（`modImplementation` 不打包） | ✅ `agentJar` fat-jar 合并 sponge-mixin + ASM（排除 guava/gson） |
+| 宿主服务 | fabric fork 无 vanilla host service（仅 LaunchWrapper/ModLauncher） | ✅ 自研 `MixinServiceVanilla`（IMixinService + IClassProvider + ITransformerProvider + IClassTracker，Knot 同款模式，~200 行）+ `MixinServiceVanillaBootstrap`（检测 Fabric/Forge 存在即让位） |
+| 全局属性 | `IGlobalPropertyService` 只列 mojang/modlauncher 的 Blackboard | ✅ `VanillaGlobalPropertyService`（内存 map，仅进 agent jar，不干扰 dev 模式） |
+| 验证 | 无真实服务器 e2e | ⚠️ 自动化冒烟已入 CI（build.sh Step 8：premain 启动 Mixin 无 ServiceNotAvailableError）；**真实 vanilla 服务器端到端（MinecraftServer 类实际被转换 + tick 事件流入 Rust）仍需手动验证一次**，步骤：`java -javaagent:morrow.jar -jar server.jar` + 任意 .morrow mod 看日志 |
+
+无 Fabric 时 `Service=Vanilla Env=SERVER` 已实测；Fabric 在场时本服务自动让位（Knot 胜出）已实测。
 
 ---
 

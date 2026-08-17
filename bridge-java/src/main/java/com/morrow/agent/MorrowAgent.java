@@ -18,7 +18,14 @@ public class MorrowAgent {
     public static void premain(String args, Instrumentation inst) {
         System.out.println("[Morrow] Agent loaded.");
 
-        // Bootstrap Mixin standalone
+        // Register the class transformer FIRST so Minecraft classes are
+        // transformed on first load. It stays a no-op until the mixin
+        // service offers the real transformer during MixinBootstrap.init().
+        AgentTransformer.instrumentation = inst;
+        inst.addTransformer(new AgentTransformer(), true);
+
+        // Bootstrap Mixin standalone — MixinServiceVanilla (discovered via
+        // META-INF/services) claims the host role on a plain vanilla server.
         MixinBootstrap.init();
         Mixins.addConfiguration("morrow.mixins.json");
         MixinEnvironment.getDefaultEnvironment()

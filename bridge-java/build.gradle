@@ -24,6 +24,9 @@ tasks.register('agentJar', Jar) {
     dependsOn tasks.named('jar')
     archiveClassifier = 'agent'
     from(zipTree(tasks.named('jar').flatMap { it.archiveFile }))
+    // Agent-only resources: the vanilla IGlobalPropertyService entry must
+    // NOT ship in the plain mods/ jar, where Fabric's own store wins.
+    from('src/main/resources-agent')
     from(configurations.agent.collect { zipTree(it) })
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/MANIFEST.MF'
@@ -57,6 +60,15 @@ dependencies {
     // Fabric Loader — dev runtime only (Loom runServer).
     // Production: java -javaagent:morrow.jar (Mixin via Agent, no Fabric)
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    // ASM for the agent service classes (MixinServiceVanilla).
+    // Mixin API itself arrives transitively via fabric-loader; pin the
+    // compile classpath to the same mixin version the agent jar bundles
+    // (0.8.5) so signatures match — dev runtime keeps the loader's own.
+    configurations.compileClasspath {
+        resolutionStrategy.force "net.fabricmc:sponge-mixin:${project.mixin_version}"
+    }
+    compileOnly "org.ow2.asm:asm:9.2"
+    compileOnly "org.ow2.asm:asm-tree:9.2"
 }
 
 def nativeLibDir = file("${rootDir}/../target/release")
