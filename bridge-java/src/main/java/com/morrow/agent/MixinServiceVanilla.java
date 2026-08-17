@@ -93,7 +93,16 @@ public class MixinServiceVanilla implements IMixinService, IClassProvider,
 
     @Override
     public URL[] getClassPath() {
-        return new URL[0];
+        // Mixin scans the provider classpath to locate mixin classes
+        // (MixinInfo.loadMixinClass) — an empty array made every mixin
+        // "not found" even though Class.forName worked. The agent jar is
+        // the only path we need: all Morrow mixin classes live there.
+        try {
+            return new URL[] { MixinServiceVanilla.class
+                    .getProtectionDomain().getCodeSource().getLocation() };
+        } catch (Exception e) {
+            return new URL[0];
+        }
     }
 
     @Override
@@ -126,12 +135,26 @@ public class MixinServiceVanilla implements IMixinService, IClassProvider,
     @Override
     public ClassNode getClassNode(String name, boolean runTransformers)
             throws ClassNotFoundException, IOException {
-        try (InputStream in = classLoader().getResourceAsStream(name + ".class")) {
-            if (in == null) {
-                throw new ClassNotFoundException(name);
-            }
+        // Class names arrive in dot form; resource paths are slash form.
+        // Not converting here made every mixin class "not found" during
+        // config preparation (the same silent failure behind targets=[]).
+        // Lookup order matters: the bundler loader for game classes, the
+        // system loader for the agent jar's own mixin classes.
+        String resource = name.replace('.', '/') + ".class";
+        ClassLoader gameLoader = AgentTransformer.currentLoader;
+        InputStream in = gameLoader != null
+                ? gameLoader.getResourceAsStream(resource)
+                : null;
+        if (in == null) {
+            in = ClassLoader.getSystemResourceAsStream(resource);
+        }
+        if (in == null) {
+            throw new ClassNotFoundException(name);
+        }
+        final InputStream stream = in;
+        try (stream) {
             ClassNode cn = new ClassNode();
-            new ClassReader(in).accept(cn, runTransformers ? ClassReader.EXPAND_FRAMES : 0);
+            new ClassReader(stream).accept(cn, runTransformers ? ClassReader.EXPAND_FRAMES : 0);
             return cn;
         }
     }
@@ -247,12 +270,19 @@ public class MixinServiceVanilla implements IMixinService, IClassProvider,
 
     @Override
     public ILogger getLogger(String name) {
-        return new LoggerAdapterConsole(name);
+        LoggerAdapterConsole logger = new LoggerAdapterConsole(name);
+        // Debug output is off by default in the console adapter; route it
+        // to stdout so -Dmixin.debug=true actually reaches the server log.
+        logger.setDebugStream(System.out);
+        return logger;
     }
 
     /** App classloader at transform time; system loader as fallback. */
     private static ClassLoader classLoader() {
-        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        ClassLoader cl = AgentTransformer.currentLoader;
+        if (cl == null) {
+            cl = Thread.currentThread().getContextClassLoader();
+        }
         return cl != null ? cl : ClassLoader.getSystemClassLoader();
     }
 }

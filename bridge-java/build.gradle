@@ -20,6 +20,17 @@ dependencies {
     }
 }
 
+// Mixin 0.8.5 ships with ASM 9.2, which cannot parse class files newer
+// than Java 19. Our classes target Java 21 (major 65), so force the ASM
+// bundled in the agent jar up to a version that handles them.
+configurations.agent {
+    resolutionStrategy.force 'org.ow2.asm:asm:9.7.1',
+            'org.ow2.asm:asm-tree:9.7.1',
+            'org.ow2.asm:asm-commons:9.7.1',
+            'org.ow2.asm:asm-util:9.7.1',
+            'org.ow2.asm:asm-analysis:9.7.1'
+}
+
 tasks.register('agentJar', Jar) {
     dependsOn tasks.named('jar')
     archiveClassifier = 'agent'

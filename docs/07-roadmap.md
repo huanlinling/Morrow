@@ -297,12 +297,16 @@ Memory:
 
 | 层 | 缺口 | 状态 |
 |----|------|------|
-| 打包 | Mixin 类未进 agent jar（`modImplementation` 不打包） | ✅ `agentJar` fat-jar 合并 sponge-mixin + ASM（排除 guava/gson） |
-| 宿主服务 | fabric fork 无 vanilla host service（仅 LaunchWrapper/ModLauncher） | ✅ 自研 `MixinServiceVanilla`（IMixinService + IClassProvider + ITransformerProvider + IClassTracker，Knot 同款模式，~200 行）+ `MixinServiceVanillaBootstrap`（检测 Fabric/Forge 存在即让位） |
-| 全局属性 | `IGlobalPropertyService` 只列 mojang/modlauncher 的 Blackboard | ✅ `VanillaGlobalPropertyService`（内存 map，仅进 agent jar，不干扰 dev 模式） |
-| 验证 | 无真实服务器 e2e | ⚠️ 自动化冒烟已入 CI（build.sh Step 8：premain 启动 Mixin 无 ServiceNotAvailableError）；**真实 vanilla 服务器端到端（MinecraftServer 类实际被转换 + tick 事件流入 Rust）仍需手动验证一次**，步骤：`java -javaagent:morrow.jar -jar server.jar` + 任意 .morrow mod 看日志 |
+| 打包 | Mixin 类未进 agent jar | ✅ `agentJar` fat-jar 合并 sponge-mixin + ASM 9.7.1（排除 guava/gson，vanilla 自带） |
+| 宿主服务 | fabric fork 无 vanilla host service | ✅ `MixinServiceVanilla`（Knot 同款直接实现）+ `MixinServiceVanillaBootstrap`（检测 Fabric/Forge 让位） |
+| 全局属性 | `IGlobalPropertyService` 无 vanilla 实现 | ✅ `VanillaGlobalPropertyService`（仅进 agent jar） |
+| 配置时机 | premain 注册 config → 目标全 "not found"（bundler 运行时才解包游戏 jar） | ✅ 推迟到 `net.minecraft.server.Main` 首次转换时注册；class provider 双 loader 查找（游戏类走 bundler loader，mixin 类走 system loader） |
+| 注入映射 | **vanilla 正式 jar 是混淆名**：`@Inject(method="loadWorld")` 找不到目标（dev 的 yarn 名 ≠ 生产混淆名） | ⚠️ 最后一步：需要 refmap（loom production mappings 生成官方名→混淆名映射）。全链路已实测到 "mixin applied"（服务→配置选择→目标解析→apply→audit 全部打通），仅注入点解析因名字失败 |
+| 次要 | mixin 类 class version 65 > 声明 JAVA_17（启动一条 WARN） | ⚠️ 无功能影响；桥接必须 release 21 编译（FFM preview），后续评估 |
 
-无 Fabric 时 `Service=Vanilla Env=SERVER` 已实测；Fabric 在场时本服务自动让位（Knot 胜出）已实测。
+e2e 验证命令（待 refmap 修复后重跑）：
+`java --enable-preview --enable-native-access=ALL-UNNAMED -javaagent:bridge-java/build/libs/morrow-host-0.1.0-agent.jar -jar server.jar nogui`
+验收：日志出现 `mixin applied: net.minecraft.server.MinecraftServer` 且无 `InvalidInjectionException`，随后 `Morrow loading...` + mod tick 事件。
 
 ---
 

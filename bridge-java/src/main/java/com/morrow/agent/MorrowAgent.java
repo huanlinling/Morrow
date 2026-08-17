@@ -10,28 +10,33 @@ import org.spongepowered.asm.mixin.Mixins;
  *
  * <p>Usage: {@code java -javaagent:morrow.jar -jar server.jar}
  *
- * <p>The agent bootstraps Mixin directly. Minecraft classes are
+ * <p>The agent bootstraps Mixin standalone. Minecraft classes are
  * transformed as they load — no Fabric Loader or Fabric API needed.
+ *
+ * <p>The mixin config is registered by {@link AgentTransformer} at the
+ * first game class load (see that class for why), not here.
  */
 public class MorrowAgent {
 
     public static void premain(String args, Instrumentation inst) {
         System.out.println("[Morrow] Agent loaded.");
 
-        // Register the class transformer FIRST so Minecraft classes are
-        // transformed on first load. It stays a no-op until the mixin
-        // service offers the real transformer during MixinBootstrap.init().
-        AgentTransformer.instrumentation = inst;
-        inst.addTransformer(new AgentTransformer(), true);
-
         // Bootstrap Mixin standalone — MixinServiceVanilla (discovered via
-        // META-INF/services) claims the host role on a plain vanilla server.
+        // META-INF/services) claims the host role on a plain vanilla server;
+        // it yields to Fabric/Forge when either launcher is present.
         MixinBootstrap.init();
-        Mixins.addConfiguration("morrow.mixins.json");
         MixinEnvironment.getDefaultEnvironment()
                 .setSide(MixinEnvironment.Side.SERVER);
+        Mixins.getConfigs();
 
         System.out.println("[Morrow] Mixin initialized. Waiting for Minecraft...");
+
+        // Register the class transformer after bootstrap completes —
+        // registering first made it fire for Mixin's own bootstrap
+        // classes and could trip JVM classloading circularity errors.
+        // Minecraft classes load after main starts, still in time.
+        AgentTransformer.instrumentation = inst;
+        inst.addTransformer(new AgentTransformer(), true);
     }
 
     /** Attach at runtime (for debugging). */

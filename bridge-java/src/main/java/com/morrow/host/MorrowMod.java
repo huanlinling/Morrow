@@ -10,8 +10,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 
 import net.minecraft.server.MinecraftServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Morrow native runtime platform — no Fabric API required.
@@ -21,7 +19,15 @@ import org.slf4j.LoggerFactory;
  */
 public class MorrowMod {
 
-    public static final Logger LOG = LoggerFactory.getLogger("Morrow");
+    /**
+     * Minimal logger. The vanilla server ships slf4j only as a nested
+     * library (META-INF/libraries/), invisible to the agent classloader —
+     * System.out lands in the server log in both agent and Fabric modes.
+     */
+    private static void log(String level, String msg) {
+        System.out.println("[Morrow][" + level + "] " + msg);
+    }
+
     private static final int ABI_VERSION = 0x0001_0000;
 
     private static PanamaBridge bridge;
@@ -35,27 +41,27 @@ public class MorrowMod {
     public static void init(MinecraftServer mcServer) {
         if (initialized) return;
         server = mcServer;
-        LOG.info("Morrow loading...");
+        log("INFO", "Morrow loading...");
 
         // 1. Native runtime
         Path nativeLib;
         try { nativeLib = NativeLibraryLoader.load(); }
         catch (UnsatisfiedLinkError e) {
-            LOG.error("Native runtime not found: {}", e.getMessage()); return; }
-        LOG.info("Native: {}", nativeLib.getFileName());
+            log("ERROR", "Native runtime not found: " + e.getMessage()); return; }
+        log("INFO", "Native: " + nativeLib.getFileName());
 
         // 2. Panama bridge
         try { bridge = PanamaBridge.create(nativeLib); }
-        catch (Exception e) { LOG.error("Panama: {}", e.getMessage()); return; }
+        catch (Exception e) { log("ERROR", "Panama: " + e.getMessage()); return; }
 
         // 3. Init runtime
         try {
             var init = bridge.downcall("morrow_init",
                     FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
             runtimeHandle = (long) init.invokeExact(ABI_VERSION);
-        } catch (Throwable e) { LOG.error("morrow_init: {}", e.getMessage()); return; }
-        if (runtimeHandle == 0) { LOG.error("ABI mismatch"); return; }
-        LOG.info("Runtime handle={}", runtimeHandle);
+        } catch (Throwable e) { log("ERROR", "morrow_init: " + e.getMessage()); return; }
+        if (runtimeHandle == 0) { log("ERROR", "ABI mismatch"); return; }
+        log("INFO", "Runtime handle=" + runtimeHandle);
 
         // 4. Load .morrow packages
         MethodHandle loadMod;
@@ -63,7 +69,7 @@ public class MorrowMod {
             loadMod = bridge.downcall("morrow_load_mod",
                     FunctionDescriptor.of(ValueLayout.JAVA_INT,
                             ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-        } catch (Throwable e) { LOG.error("load_mod: {}", e.getMessage()); return; }
+        } catch (Throwable e) { log("ERROR", "load_mod: " + e.getMessage()); return; }
 
         Path modsDir = Path.of("mods");
         if (Files.isDirectory(modsDir)) {
@@ -74,27 +80,27 @@ public class MorrowMod {
                     if (!loadPackage(bridge, loadMod, p)) failed.add(p);
                 }
                 for (var p : failed) { loadPackage(bridge, loadMod, p); }
-            } catch (Exception e) { LOG.warn("mod scan: {}", e.getMessage()); }
+            } catch (Exception e) { log("WARN", "mod scan: " + e.getMessage()); }
         }
 
         // 5. Batch dispatch (replaces individual tick/event calls)
         try {
             dispatchBatch = bridge.downcall("morrow_dispatch_batch",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-        } catch (Throwable e) { LOG.error("batch: {}", e.getMessage()); }
+        } catch (Throwable e) { log("ERROR", "batch: " + e.getMessage()); }
 
         // 6. Dispatch server start
         try {
             var start = bridge.downcall("morrow_dispatch_server_start",
                     FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG));
             start.invokeExact(runtimeHandle);
-        } catch (Throwable e) { LOG.warn("start: {}", e.getMessage()); }
+        } catch (Throwable e) { log("WARN", "start: " + e.getMessage()); }
 
         // 7. Host API upcalls
         registerHostApi();
 
         initialized = true;
-        LOG.info("Morrow ready. {} mod(s).", modCount());
+        log("INFO", "Morrow ready. " + modCount() + " mod(s).");
     }
 
     private static MethodHandle dispatchBatch;
@@ -115,7 +121,7 @@ public class MorrowMod {
             // native memory, no Java-heap copy, no Arena.global() growth.
             var seg = eventBuffer.finish();
             dispatchBatch.invokeExact(runtimeHandle, seg, eventBuffer.size());
-        } catch (Throwable e) { LOG.error("batch: {}", e.getMessage()); }
+        } catch (Throwable e) { log("ERROR", "batch: " + e.getMessage()); }
         finally { eventBuffer.reset(); } // close arena + start the next tick clean
     }
 
@@ -201,7 +207,7 @@ public class MorrowMod {
     private static void logMessage(int level, long ptr, int len) {
         byte[] b = MemorySegment.ofAddress(ptr).reinterpret(len).toArray(ValueLayout.JAVA_BYTE);
         String msg = new String(b, StandardCharsets.UTF_8);
-        switch (level) { case 3 -> LOG.error(msg); case 2 -> LOG.warn(msg); case 1 -> LOG.info(msg); default -> LOG.debug(msg); }
+        switch (level) { case 3 -> log("ERROR", msg); case 2 -> log("WARN", msg); case 1 -> log("INFO", msg); default -> log("DEBUG", msg); }
     }
 
     private static void registerHostApi() {
@@ -217,6 +223,6 @@ public class MorrowMod {
             vtable.set(ValueLayout.ADDRESS, 48, linker.upcallStub(lookup.findStatic(MorrowMod.class, "getWorldSnapshot", MethodType.methodType(int.class, long.class, int.class)), FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT), Arena.global()));
             var ra = bridge.downcall("morrow_register_host_api", FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
             ra.invokeExact(runtimeHandle, vtable);
-        } catch (Throwable e) { LOG.error("Host API: {}", e.getMessage()); }
+        } catch (Throwable e) { log("ERROR", "Host API: " + e.getMessage()); }
     }
 }

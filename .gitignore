@@ -17,3 +17,6 @@ bridge-java/run/
 .idea/
 .vscode/
 *.iml
+
+# E2E test environment (Mojang server.jar, world, logs)
+e2e/
