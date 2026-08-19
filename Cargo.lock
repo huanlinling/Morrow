@@ -418,6 +418,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "morrow-cli"
+version = "1.0.0"
+dependencies = [
+ "zip",
+]
+
+[[package]]
 name = "morrow-macros"
 version = "1.0.0"
 dependencies = [

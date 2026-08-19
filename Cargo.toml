@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "morrow-cli",
     "runtime-rs",
     "runtime-rs/tests/fixtures/testmod",
     "runtime-rs/tests/fixtures/noop-mod",

@@ -1,0 +1,18 @@
+[package]
+name = "morrow-cli"
+version = "1.0.0"
+edition = "2021"
+description = "Morrow CLI — scaffold, build, and package Minecraft mods written in Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/huanlinling/Morrow"
+keywords = ["minecraft", "mod", "modding", "cli"]
+categories = ["command-line-utilities", "game-development"]
+readme = "../README.md"
+
+# The acceptance command is `morrow new|build|package`, not `morrow-cli`.
+[[bin]]
+name = "morrow"
+path = "src/main.rs"
+
+[dependencies]
+zip = { version = "2", default-features = false }
