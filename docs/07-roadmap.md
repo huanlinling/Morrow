@@ -317,29 +317,29 @@ e2e 验证命令：
 
 **预计时间：** 2 周
 **依赖：** M5, M6, M7
-**状态：** ⬜ Planned
+**状态：** ✅ 完成（2026-08-19，8.7 公告为文稿待发布）
 
 ### 任务清单
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 8.1 | API 文档（rustdoc） | ⬜ |
-| 8.2 | 用户指南（Getting Started） | ⬜ |
-| 8.3 | 3+ 示例 mod | ⬜ |
-| 8.4 | CI/CD pipeline 完整 | ⬜ |
-| 8.5 | 版本号锁定、changelog | ⬜ |
-| 8.6 | 发布到 crates.io + GitHub Releases | ⬜ |
-| 8.7 | 公告文章 | ⬜ |
+| 8.1 | API 文档（rustdoc） | ✅ 零警告；CI 以 `-D warnings` 强制 |
+| 8.2 | 用户指南（Getting Started） | ✅ README Quick Start + 生产运行手册（standalone agent 命令实测） |
+| 8.3 | 3+ 示例 mod | ✅ hello-morrow / chat-bot / motd，CI 打包，agent e2e 实测加载 |
+| 8.4 | CI/CD pipeline 完整 | ✅ Rust 测试 + rustdoc + 3 示例打包 + gradle + build.sh 全套（含 agent premain smoke、基准） |
+| 8.5 | 版本号锁定、changelog | ✅ 全 crate + mod_version = 1.0.0；CHANGELOG.md |
+| 8.6 | 发布到 crates.io + GitHub Releases | ✅ morrow / morrow-macros / morrow-cli @ 1.0.0；Release v1.0.0 附 agent jar |
+| 8.7 | 公告文章 | ✅ 文稿 docs/announcement-v1.0.0.md（发布渠道由作者定） |
 
 ### 验收标准
 
 ```
-morrow = "1.0.0"  # crates.io 可下载
-cargo install morrow-cli
-morrow new my-first-mod
-morrow build
-morrow package
-# → my-first-mod.morrow 可被 MorrowHost 加载
+morrow = "1.0.0"  # crates.io 可下载          ✅ 空项目 cargo add 实测
+cargo install morrow-cli                      ✅ 从 crates.io 安装实测
+morrow new my-first-mod                       ✅
+morrow build                                  ✅
+morrow package                                ✅
+# → my-first-mod.morrow 可被 MorrowHost 加载   ✅ 布局与 package-mod.sh 一致（e2e 同款已加载）
 ```
 
 ---
