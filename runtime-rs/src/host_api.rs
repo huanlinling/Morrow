@@ -1,7 +1,9 @@
 //! Host API — two-way bridge between Rust mods and Java game server.
 
+use crate::event::tick::TickCallback;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::thread::ThreadId;
 
 // ---------------------------------------------------------------------------
 // Runtime API — passed to mods during init
@@ -87,23 +89,79 @@ pub struct HostVtable {
     pub get_world_snapshot: Option<GetWorldSnapshotFn>,
 }
 
+/// A game-state write requested from a non-main thread. Minecraft is
+/// single-threaded: touching game state off the main thread races the
+/// server and can crash the JVM. Queued instead, delivered by
+/// [`HostApi::flush_outbound`] on the main thread at the next tick.
+enum Outbound {
+    Message(String),
+    Command(String),
+}
+
+/// State shared across `HostApi` clones (one clone is taken per tick):
+/// the recorded main-thread identity and the cross-thread outbox.
+/// Without `Arc`, queued writes would strand in the per-tick clone.
+struct HostApiShared {
+    main_thread: Mutex<Option<ThreadId>>,
+    outbound: Mutex<Vec<Outbound>>,
+}
+
 pub struct HostApi {
     vtable: Mutex<Option<HostVtable>>,
+    shared: Arc<HostApiShared>,
 }
 
 impl Clone for HostApi {
     fn clone(&self) -> Self {
         HostApi {
             vtable: Mutex::new(self.vtable.lock().unwrap().clone()),
+            shared: self.shared.clone(),
         }
     }
 }
 
 impl HostApi {
-    pub fn new() -> Self { HostApi { vtable: Mutex::new(None) } }
+    pub fn new() -> Self {
+        HostApi {
+            vtable: Mutex::new(None),
+            shared: Arc::new(HostApiShared {
+                main_thread: Mutex::new(None),
+                outbound: Mutex::new(Vec::new()),
+            }),
+        }
+    }
 
     pub fn set_vtable(&self, ptr: *const HostVtable) {
         unsafe { *self.vtable.lock().unwrap() = Some(ptr.read()); }
+    }
+
+    /// Record the calling thread as the game main thread. Called from
+    /// `morrow_dispatch_batch`, which always runs on the main thread.
+    pub fn note_main_thread(&self) {
+        *self.shared.main_thread.lock().unwrap() = Some(std::thread::current().id());
+    }
+
+    /// True when called on the recorded game main thread. Before the
+    /// first dispatch records one, everything is treated as off-main:
+    /// writes queue and are delivered at the first tick.
+    fn on_main_thread(&self) -> bool {
+        self.shared
+            .main_thread
+            .lock()
+            .unwrap()
+            .is_some_and(|id| id == std::thread::current().id())
+    }
+
+    /// Deliver queued writes. Must run on the game main thread (called
+    /// from `morrow_dispatch_batch` before event dispatch).
+    pub fn flush_outbound(&self) {
+        let pending = std::mem::take(&mut *self.shared.outbound.lock().unwrap());
+        for item in pending {
+            match item {
+                Outbound::Message(msg) => { self.send_message_direct(&msg); }
+                Outbound::Command(cmd) => { self.execute_command_direct(&cmd); }
+            }
+        }
     }
 
     pub fn get_player_count(&self) -> Option<i32> {
@@ -112,7 +170,23 @@ impl HostApi {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() })).ok()
     }
 
+    /// Broadcast a chat message. Safe from any thread: on the game main
+    /// thread it goes out immediately; from any other thread it is
+    /// queued and delivered at the next tick (≤ 50 ms later).
     pub fn send_message(&self, msg: &str) -> bool {
+        if self.on_main_thread() {
+            self.send_message_direct(msg)
+        } else {
+            self.shared
+                .outbound
+                .lock()
+                .unwrap()
+                .push(Outbound::Message(msg.to_string()));
+            true
+        }
+    }
+
+    fn send_message_direct(&self, msg: &str) -> bool {
         let guard = self.vtable.lock().unwrap();
         let Some(vtable) = guard.as_ref() else { return false };
         let Some(func) = vtable.send_message else { return false };
@@ -131,7 +205,23 @@ impl HostApi {
         result.ok().map(|n| n.min(buf.len()))
     }
 
+    /// Execute a console command. Same threading contract as
+    /// [`HostApi::send_message`]: immediate on the main thread, queued
+    /// to the next tick from any other thread.
     pub fn execute_command(&self, cmd: &str) -> bool {
+        if self.on_main_thread() {
+            self.execute_command_direct(cmd)
+        } else {
+            self.shared
+                .outbound
+                .lock()
+                .unwrap()
+                .push(Outbound::Command(cmd.to_string()));
+            true
+        }
+    }
+
+    fn execute_command_direct(&self, cmd: &str) -> bool {
         let guard = self.vtable.lock().unwrap();
         let Some(vtable) = guard.as_ref() else { return false };
         let Some(func) = vtable.execute_command else { return false };
@@ -286,21 +376,67 @@ impl Default for ModEventCallbacks {
 }
 
 // ---------------------------------------------------------------------------
-// Panic quarantine
+// Dispatch tables — one Arc snapshot per tick instead of N map clones
 // ---------------------------------------------------------------------------
 
-pub struct Quarantine {
-    pub(crate) quarantined: Mutex<HashSet<String>>,
+/// Everything the per-tick dispatch loop reads, behind a single `Arc`.
+///
+/// `morrow_dispatch_batch` snapshots the tables with one refcount bump
+/// (`Arc::clone`); the old code cloned every HashMap/HashSet on every
+/// tick (~9 allocations). Mutations (mod registration, quarantine) are
+/// rare and go through `Arc::make_mut` — clone-on-write there is fine.
+#[derive(Clone, Default)]
+pub struct DispatchTables {
+    pub tick: HashMap<String, TickCallback>,
+    pub events: ModEventCallbacks,
+    pub quarantined: HashSet<String>,
 }
 
-impl Quarantine {
-    pub fn new() -> Self { Quarantine { quarantined: Mutex::new(HashSet::new()) } }
-    pub fn add(&self, name: &str) { self.quarantined.lock().unwrap().insert(name.to_string()); }
-    #[allow(dead_code)] // used by mod-facing quarantine queries (M3+)
-    pub fn is_quarantined(&self, name: &str) -> bool { self.quarantined.lock().unwrap().contains(name) }
-    pub fn count(&self) -> usize { self.quarantined.lock().unwrap().len() }
-    /// Snapshot of currently quarantined mods.
-    pub fn snapshot(&self) -> HashSet<String> { self.quarantined.lock().unwrap().clone() }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl Default for Quarantine { fn default() -> Self { Self::new() } }
+    static SENT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" fn rec_send(ptr: *const u8, len: u32) {
+        let s = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+        SENT.lock().unwrap().push(String::from_utf8(s.to_vec()).unwrap());
+    }
+
+    #[test]
+    fn off_main_writes_queue_and_flush_on_main() {
+        let api = HostApi::new();
+        api.set_vtable(&HostVtable {
+            get_player_count: None,
+            send_message: Some(rec_send),
+            get_player_list: None,
+            execute_command: None,
+            get_world_time: None,
+            log_message: None,
+            get_world_snapshot: None,
+        });
+
+        // Before any main thread is known, even this thread queues.
+        api.send_message("early");
+        assert!(SENT.lock().unwrap().is_empty());
+
+        // A mod-spawned thread must not touch the host directly.
+        let api2 = api.clone();
+        std::thread::spawn(move || {
+            assert!(api2.send_message("hi"));
+        })
+        .join()
+        .unwrap();
+        assert!(SENT.lock().unwrap().is_empty(), "off-main write must queue");
+
+        // Next tick on the main thread: record + flush, FIFO order.
+        api.note_main_thread();
+        api.flush_outbound();
+        assert_eq!(SENT.lock().unwrap().as_slice(), ["early", "hi"]);
+
+        // Main-thread calls now go direct, nothing queued.
+        api.send_message("now");
+        assert_eq!(SENT.lock().unwrap().as_slice(), ["early", "hi", "now"]);
+        assert!(api.shared.outbound.lock().unwrap().is_empty());
+    }
+}

@@ -23,11 +23,13 @@ java -javaagent / -jar server.jar + morrow.jar（drop 进 mods/）
         └─ Rust Runtime（libmorrow_runtime.so）
              ├─ 每个 extern "C" 入口包 catch_unwind（panic 绝不穿透 FFI）
              ├─ RuntimeKernel：单把 Mutex<RuntimeData> 装全部状态
-             │    registry / tick / lifecycle / errors / host_api / commands /
-             │    quarantines / configs / events / snapshot
+             │    registry / dispatch(Arc) / lifecycle / errors / host_api /
+             │    commands / configs / snapshot
              ├─ morrow_dispatch_batch：零拷贝解析 wire format →
-             │    锁内收集回调表 → 锁外逐个 dispatch（每个回调独立 catch_unwind）
-             ├─ WorldSnapshot：每 tick 1 次 upcall 刷新，mod API 查询零 upcall
+             │    Arc 快照回调表（1 次引用计数，不克隆 map）→ 锁外逐个
+             │    dispatch（每个回调独立 catch_unwind）
+             ├─ WorldSnapshot：消费者门禁——有 mod 查询 API 才每 tick 刷新；
+             │    当前无消费者 API，生产零开销
              └─ Mod A, B, C...（dlopen 的 cdylib，符号发现注册回调）
 ```
 
@@ -38,12 +40,19 @@ java -javaagent / -jar server.jar + morrow.jar（drop 进 mods/）
 ```
 src/main/java/com/morrow/
 ├── agent/MorrowAgent.java          # premain：注册 Mixin
-├── mixin/MinecraftServerMixin.java # 唯一注入点：loadWorld / tick / shutdown
+│   ├── HostLink.java               # addURL 让 game loader 看到 agent 类（agent 模式）
+│   └── ChildFirstLoader.java       # 默认包 child-first（绕 Mojang 签名冲突）
+├── mixin/MinecraftServerMixin.java # 唯一注入点：loadWorld / tick / shutdown（dev，yarn 名）
 └── host/
-    ├── MorrowMod.java              # 宿主逻辑：init / onTick / flushBatch / onShutdown
+    ├── MorrowMod.java              # 宿主逻辑：init / onTick / flushBatch / onShutdown（game-free）
+    ├── ServerApi.java              # 游戏访问接口（适配器模式的缝）
+    ├── ServerApiFabric.java        # yarn 名实现（dev/loom）
     ├── PanamaBridge.java           # 一次性 SymbolLookup + downcall MethodHandle
     ├── NativeLibraryLoader.java    # 平台感知加载 libmorrow_runtime.so
     └── EventBuffer.java            # 每 tick 事件累积 → off-heap MemorySegment
+src/vanilla/java/                   # agent 模式专用（混淆名，只进 agent jar）
+    ├── ServerApiVanilla.java       # 默认包适配器（1.20.1 javap 验证的混淆签名）
+    └── com/morrow/mixin/MinecraftServerMixinVanilla.java  # 混淆名 twin mixin
 ```
 
 **启动序列（MorrowMod.init，由 Mixin 在 loadWorld RETURN 触发）：**
@@ -89,6 +98,9 @@ src/
   Runtime API 而不死锁。
 - 每个 mod 回调独立 `catch_unwind`；panic 的 mod 进 Quarantine，后续 tick
   跳过它，其他 mod 与服务器继续运行。
+- 写操作（send_message / execute_command）跨线程安全：非主线程调用进
+  outbound 队列，下一 tick 主线程 flush（≤50ms）；主线程调用直达，零延迟。
+  读操作（player_count/list/time）直达游戏，限主线程。
 
 ### Layer 4: SDK（sdk-rs + morrow-macros）
 
@@ -108,8 +120,8 @@ tick RETURN flushBatch()：
                finish() 盖总数 → 1 次 downcall morrow_dispatch_batch(ptr, len)
 Rust 侧：
   1. 解析 u32 count + 逐事件（u16 type + u16 len1 + u16 len2 + payload）
-  2. 锁内快照：tick/event 回调表 + quarantine + host_api
-  3. 1 次 upcall 刷新 WorldSnapshot（v0.14，mod 查询零 upcall）
+  2. 锁内 Arc 快照：dispatch 表 + host_api（1 次引用计数，无 map 克隆）
+  3. WorldSnapshot 有消费者才 1 次 upcall 刷新（v0.16 无查询 API → 跳过）
   4. 锁外逐回调 dispatch，每个 catch_unwind；panic → quarantine
 最后        eventBuffer.reset()：close per-tick arena（内存即时归还）
 ```

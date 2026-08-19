@@ -43,7 +43,13 @@
 //! [`send_message`], [`execute_command`], [`player_count`], [`player_list`],
 //! [`world_time`], [`config`], [`log`] — thin wrappers over the runtime API,
 //! reading the current runtime vtable from a global static set during init.
-//! Works from any thread (including threads the mod spawns itself).
+//!
+//! Thread safety: writes ([`send_message`], [`execute_command`]) are safe
+//! from any thread — off the game main thread the runtime queues them and
+//! delivers on the main thread at the next tick (≤ 50 ms). Reads
+//! ([`player_count`], [`player_list`], [`world_time`]) go straight into
+//! the game and must only be called on the main thread (i.e. from inside
+//! event/tick/command handlers).
 
 pub mod __internal;
 pub mod context;
@@ -92,12 +98,15 @@ pub enum LogLevel {
 // ─── Global API (event-side access) ─────────────
 //
 // The runtime vtable is stored in a global `static` (per-library, set by
-// the generated `morrow_mod_init`). These wrappers work from any thread —
-// including threads the mod spawns itself — because the vtable points at
-// process-global functions. If the runtime was never initialized (mod
-// code running outside init/handlers, or the library not loaded by the
-// host), these panic with a descriptive message rather than silently
-// no-oping; [`log`] is the exception and always works.
+// the generated `morrow_mod_init`). Writes (`send_message`,
+// `execute_command`) work from any thread — the runtime marshals
+// off-main-thread calls onto the game main thread. Reads (`player_count`,
+// `player_list`, `world_time`) call into the game directly and are
+// main-thread-only (event/tick/command handlers). If the runtime was
+// never initialized (mod code running outside init/handlers, or the
+// library not loaded by the host), these panic with a descriptive
+// message rather than silently no-oping; [`log`] is the exception and
+// always works.
 
 /// Broadcast a message to all players' chat. Panics if runtime not set.
 pub fn send_message(msg: &str) {

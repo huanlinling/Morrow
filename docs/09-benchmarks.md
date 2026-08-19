@@ -37,12 +37,19 @@ empty runtime, release build.
 
 | Events/tick | Avg latency | Marginal cost/event |
 |-------------|-------------|---------------------|
-| 1 (tick only) | **0.393 μs** | — |
-| 8 (tick + 7 chat) | **0.617 μs** | 77 ns |
+| 1 (tick only) | **0.320 μs** | — |
+| 8 (tick + 7 chat) | **0.595 μs** | 74 ns |
 
-Acceptance (docs/07 M7): < 1 μs/tick for 1 event — passed with 2.5× margin.
-The EventBuffer + arena path costs ~0.35 μs/tick on top of the bare
-`morrow_tick` downcall; still 0.0008% of the 50 ms tick budget.
+Acceptance (docs/07 M7): < 1 μs/tick for 1 event — passed with 3× margin.
+The EventBuffer + arena path costs ~0.28 μs/tick on top of the bare
+`morrow_tick` downcall; still 0.0006% of the 50 ms tick budget.
+
+Post-M7 hardening (numbers above): the per-tick dispatch-table clone
+(~9 HashMap/HashSet allocations) became a single `Arc` refcount bump
+(0.393 → 0.320 μs), and the per-tick WorldSnapshot refresh upcall is
+now consumer-gated — skipped entirely until a mod-facing snapshot query
+API exists, so production ticks no longer pay its O(players) Java-side
+serialization.
 
 ## Multi-mod Scalability (M7)
 
@@ -119,8 +126,8 @@ The Panama FFM bridge delivers on the "native performance" promise:
 - **Zero measurable overhead** from the Java→Rust bridge
 - Tick dispatch is fast enough for 20 TPS with thousands of mods
   (50 mods ≈ 1.4 μs/tick; the 50 ms budget would fit ~35,000 such mods)
-- Batch dispatch is the right shape: 1 event 0.39 μs, 8 events 0.62 μs —
-  marginal events cost 77 ns, not another FFI round trip
+- Batch dispatch is the right shape: 1 event 0.32 μs, 8 events 0.60 μs —
+  marginal events cost 74 ns, not another FFI round trip
 - Mod loading is I/O-bound by disk, not CPU
 
 **Performance line is at its ceiling** (design.md §零): loader overhead is

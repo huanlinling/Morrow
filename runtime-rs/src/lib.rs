@@ -22,8 +22,9 @@ use abi::handles::{Handle, HandleTable};
 use event::tick::TickCallback;
 use host_api::WorldSnapshot;
 use runtime::RuntimeKernel;
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 // ---------------------------------------------------------------------------
 // Global registry of live runtime kernels, keyed by opaque handle.
@@ -227,40 +228,43 @@ pub extern "C" fn morrow_load_mod(
                     data.configs.insert(&name, cfg);
                     eprintln!("[Morrow]   Config loaded");
                 }
+                let tables = {
+                    if let Some(cb) = exports.server_start_callback {
+                        data.lifecycle.server_start.insert(name.clone(), cb);
+                        eprintln!("[Morrow]   Registered server_start for '{name}'");
+                    }
+                    if let Some(cb) = exports.server_stop_callback {
+                        data.lifecycle.server_stop.insert(name.clone(), cb);
+                        eprintln!("[Morrow]   Registered server_stop for '{name}'");
+                    }
+                    Arc::make_mut(&mut data.dispatch)
+                };
                 if let Some(cb) = exports.tick_callback {
-                    data.tick.register(&name, cb);
+                    tables.tick.insert(name.clone(), cb);
                     eprintln!("[Morrow]   Registered tick callback for '{name}'");
                 }
-                if let Some(cb) = exports.server_start_callback {
-                    data.lifecycle.server_start.insert(name.clone(), cb);
-                    eprintln!("[Morrow]   Registered server_start for '{name}'");
-                }
-                if let Some(cb) = exports.server_stop_callback {
-                    data.lifecycle.server_stop.insert(name.clone(), cb);
-                    eprintln!("[Morrow]   Registered server_stop for '{name}'");
-                }
                 if let Some(cb) = exports.player_join_callback {
-                    data.events.player_join.insert(name.clone(), cb);
+                    tables.events.player_join.insert(name.clone(), cb);
                     eprintln!("[Morrow]   Registered player_join for '{name}'");
                 }
                 if let Some(cb) = exports.player_leave_callback {
-                    data.events.player_leave.insert(name.clone(), cb);
+                    tables.events.player_leave.insert(name.clone(), cb);
                     eprintln!("[Morrow]   Registered player_leave for '{name}'");
                 }
                 if let Some(cb) = exports.chat_message_callback {
-                    data.events.chat_message.insert(name.clone(), cb);
+                    tables.events.chat_message.insert(name.clone(), cb);
                     eprintln!("[Morrow]   Registered chat_message for '{name}'");
                 }
                 if let Some(cb) = exports.block_break_callback {
-                    data.events.block_break.insert(name.clone(), cb);
+                    tables.events.block_break.insert(name.clone(), cb);
                     eprintln!("[Morrow]   Registered block_break for '{name}'");
                 }
                 if let Some(cb) = exports.block_place_callback {
-                    data.events.block_place.insert(name.clone(), cb);
+                    tables.events.block_place.insert(name.clone(), cb);
                     eprintln!("[Morrow]   Registered block_place for '{name}'");
                 }
                 if let Some(cb) = exports.player_death_callback {
-                    data.events.player_death.insert(name.clone(), cb);
+                    tables.events.player_death.insert(name.clone(), cb);
                     eprintln!("[Morrow]   Registered player_death for '{name}'");
                 }
 
@@ -287,19 +291,18 @@ pub extern "C" fn morrow_tick(runtime_handle: u64, tick_number: u64) {
             None => return,
         };
 
-        // Collect callbacks under the lock, invoke after releasing it
-        // (mods may re-enter the runtime API from their callbacks).
-        let callbacks: Vec<(String, TickCallback)> = RUNTIMES
-            .with(handle, |k| k.data().tick.callbacks.clone().into_iter().collect())
-            .unwrap_or_default();
+        // Snapshot the tables with one Arc bump, invoke after releasing
+        // the lock (mods may re-enter the runtime API from callbacks).
+        let tables = RUNTIMES.with(handle, |k| k.data().dispatch.clone());
+        let Some(tables) = tables else { return };
 
-        let panicked = run_tick_callbacks(&callbacks, tick_number);
+        let panicked = run_tick_callbacks(&tables.tick, tick_number);
         quarantine_panicked(runtime_handle, &panicked);
     })
 }
 
 /// Run tick callbacks, each panic-isolated. Returns names that panicked.
-fn run_tick_callbacks(callbacks: &[(String, TickCallback)], tick: u64) -> Vec<String> {
+fn run_tick_callbacks(callbacks: &HashMap<String, TickCallback>, tick: u64) -> Vec<String> {
     let mut panicked = Vec::new();
     for (name, cb) in callbacks {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -319,9 +322,9 @@ fn quarantine_panicked(runtime_handle: u64, panicked: &[String]) {
         return;
     }
     with_runtime(runtime_handle, |kernel| {
-        let data = kernel.data();
+        let mut data = kernel.data();
         for name in panicked {
-            data.quarantines.add(name);
+            Arc::make_mut(&mut data.dispatch).quarantined.insert(name.clone());
             eprintln!("[Morrow] Mod '{name}' quarantined after panic");
         }
     });
@@ -346,33 +349,42 @@ pub extern "C" fn morrow_dispatch_batch(
         let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
         let mut pos: usize = 4;
 
-        // Snapshot the dispatch tables once, then run callbacks with no
-        // runtime lock held — mods may re-enter the API from callbacks
-        // without deadlocking.
+        // Snapshot the dispatch tables with one Arc bump, then run
+        // callbacks with no runtime lock held — mods may re-enter the
+        // API from callbacks without deadlocking.
         let dispatch = with_runtime(runtime_handle, |kernel| {
             let data = kernel.data();
             (
-                data.tick.callbacks.clone(),
-                data.events.clone(),
-                data.quarantines.snapshot(),
+                data.dispatch.clone(),
                 data.host_api.clone(),
+                data.snapshot_consumers > 0,
             )
         });
-        let (tick_cbs, event_cbs, quarantined, host_api) = match dispatch {
+        let (tables, host_api, snapshot_wanted) = match dispatch {
             Some(d) => d,
             None => return,
         };
 
-        // Refresh the world snapshot once per tick (1 upcall, not N)
-        // and cache it on the kernel for the mod API (v0.14 PlayerSnapshot).
-        let mut snap_buf = [0u8; 4096];
-        let snapshot = host_api
-            .get_world_snapshot(&mut snap_buf)
-            .and_then(|n| WorldSnapshot::parse(&snap_buf[..n]));
-        if let Some(snap) = snapshot {
-            with_runtime(runtime_handle, |kernel| {
-                kernel.data().snapshot = Some(snap);
-            });
+        // dispatch_batch always runs on the game main thread: record it
+        // (so off-thread mod writes queue instead of touching the game)
+        // and deliver anything mod threads queued since the last tick.
+        host_api.note_main_thread();
+        host_api.flush_outbound();
+
+        // Refresh the world snapshot once per tick (1 upcall, not N) —
+        // but only while a mod-facing API actually consumes it. v0.16
+        // ships no snapshot query API, so this skips the upcall and its
+        // O(players) serialization on the Java game thread entirely.
+        if snapshot_wanted {
+            let mut snap_buf = [0u8; 4096];
+            let snapshot = host_api
+                .get_world_snapshot(&mut snap_buf)
+                .and_then(|n| WorldSnapshot::parse(&snap_buf[..n]));
+            if let Some(snap) = snapshot {
+                with_runtime(runtime_handle, |kernel| {
+                    kernel.data().snapshot = Some(snap);
+                });
+            }
         }
 
         let mut panicked: Vec<String> = Vec::new();
@@ -392,8 +404,8 @@ pub extern "C" fn morrow_dispatch_batch(
                     if pos + 8 <= data.len() {
                         let tick = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
                         pos += 8;
-                        for (name, cb) in &tick_cbs {
-                            if quarantined.contains(name) {
+                        for (name, cb) in &tables.tick {
+                            if tables.quarantined.contains(name) {
                                 continue;
                             }
                             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -412,12 +424,12 @@ pub extern "C" fn morrow_dispatch_batch(
                     if pos + f1_len <= data.len() {
                         pos += f1_len;
                         let map = if etype == 1 {
-                            &event_cbs.player_join
+                            &tables.events.player_join
                         } else {
-                            &event_cbs.player_leave
+                            &tables.events.player_leave
                         };
                         for (name, cb) in map {
-                            if quarantined.contains(name) {
+                            if tables.quarantined.contains(name) {
                                 continue;
                             }
                             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -436,8 +448,8 @@ pub extern "C" fn morrow_dispatch_batch(
                         let p_ptr = data[pos..pos + f1_len].as_ptr();
                         let m_ptr = data[pos + f1_len..pos + f1_len + f2_len].as_ptr();
                         pos += f1_len + f2_len;
-                        for (name, cb) in &event_cbs.chat_message {
-                            if quarantined.contains(name) {
+                        for (name, cb) in &tables.events.chat_message {
+                            if tables.quarantined.contains(name) {
                                 continue;
                             }
                             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -457,12 +469,12 @@ pub extern "C" fn morrow_dispatch_batch(
                         let b_ptr = data[pos + f1_len..pos + f1_len + f2_len].as_ptr();
                         pos += f1_len + f2_len;
                         let map = if etype == 4 {
-                            &event_cbs.block_break
+                            &tables.events.block_break
                         } else {
-                            &event_cbs.block_place
+                            &tables.events.block_place
                         };
                         for (name, cb) in map {
-                            if quarantined.contains(name) {
+                            if tables.quarantined.contains(name) {
                                 continue;
                             }
                             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -479,8 +491,8 @@ pub extern "C" fn morrow_dispatch_batch(
                     // player death
                     if pos + f1_len <= data.len() {
                         pos += f1_len;
-                        for (name, cb) in &event_cbs.player_death {
-                            if quarantined.contains(name) {
+                        for (name, cb) in &tables.events.player_death {
+                            if tables.quarantined.contains(name) {
                                 continue;
                             }
                             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -854,7 +866,7 @@ pub extern "C" fn morrow_mod_count() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_quarantined_count() -> u64 {
     panic::ffi_boundary(0, || {
-        RUNTIMES.fold(0u64, |acc, kernel| acc + kernel.data().quarantines.count() as u64)
+        RUNTIMES.fold(0u64, |acc, kernel| acc + kernel.data().dispatch.quarantined.len() as u64)
     })
 }
 

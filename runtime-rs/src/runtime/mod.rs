@@ -8,13 +8,12 @@
 pub mod state;
 
 use crate::error::ErrorChannel;
-use crate::event::tick::TickRegistry;
 use crate::host_api::{
-    CommandRegistry, ConfigStore, HostApi, ModEventCallbacks, Quarantine, WorldSnapshot,
+    CommandRegistry, ConfigStore, DispatchTables, HostApi, WorldSnapshot,
 };
 use crate::mod_loader::ModRegistry;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use state::RuntimeState;
 
 /// All per-runtime mutable state, behind one lock.
@@ -25,16 +24,23 @@ use state::RuntimeState;
 /// so a mod re-entering the runtime API can never deadlock.
 pub struct RuntimeData {
     pub registry: ModRegistry,
-    pub tick: TickRegistry,
+    /// Dispatch tables behind an Arc: the per-tick loop snapshots them
+    /// with a refcount bump instead of cloning every map.
+    pub dispatch: Arc<DispatchTables>,
     pub lifecycle: LifecycleRegistry,
     pub errors: ErrorChannel,
     pub host_api: HostApi,
     pub commands: CommandRegistry,
-    pub quarantines: Quarantine,
     pub configs: ConfigStore,
-    pub events: ModEventCallbacks,
-    /// World snapshot refreshed once per tick (v0.14 PlayerSnapshot).
+    /// World snapshot refreshed once per tick (v0.14 PlayerSnapshot) —
+    /// only while `snapshot_consumers > 0`.
     pub snapshot: Option<WorldSnapshot>,
+    /// Live consumers of the per-tick WorldSnapshot refresh. Mod-facing
+    /// snapshot query APIs increment this on first use; while zero the
+    /// refresh upcall (and its O(players) serialization on the Java
+    /// game thread) is skipped entirely. v0.16 ships no query API, so
+    /// production pays nothing.
+    pub snapshot_consumers: u32,
 }
 
 /// The Morrow Runtime kernel.
@@ -61,7 +67,7 @@ impl RuntimeKernel {
         RuntimeKernel {
             data: Mutex::new(RuntimeData {
                 registry: ModRegistry::new(),
-                tick: TickRegistry::new(),
+                dispatch: Arc::new(DispatchTables::default()),
                 lifecycle: LifecycleRegistry {
                     server_start: HashMap::new(),
                     server_stop: HashMap::new(),
@@ -69,10 +75,9 @@ impl RuntimeKernel {
                 errors: ErrorChannel::new(),
                 host_api: HostApi::new(),
                 commands: CommandRegistry::new(),
-                quarantines: Quarantine::new(),
                 configs: ConfigStore::new(),
-                events: ModEventCallbacks::new(),
                 snapshot: None,
+                snapshot_consumers: 0,
             }),
             state: Mutex::new(RuntimeState::Ready),
         }
@@ -165,8 +170,8 @@ mod tests {
         let rt = RuntimeKernel::new();
         let data = rt.data();
         assert_eq!(data.registry.len(), 0);
-        assert!(data.events.player_join.is_empty());
-        assert_eq!(data.quarantines.count(), 0);
+        assert!(data.dispatch.events.player_join.is_empty());
+        assert_eq!(data.dispatch.quarantined.len(), 0);
         assert!(!data.commands.dispatch("nope", ""));
     }
 }
