@@ -20,6 +20,9 @@ jobs:
           cargo build --release
           cargo test --release
 
+      - name: rustdoc (warnings are errors)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
       - name: Setup JDK 21 (Temurin)
         uses: actions/setup-java@v4
         with:
@@ -36,8 +39,9 @@ jobs:
         working-directory: bridge-java
         run: ./gradlew --no-daemon build
 
-      - name: Panama bridge tests (M0/M1)
-        run: make test-bridge
+      - name: Full bridge suite (M0/M1, parity, benchmarks, agent smoke)
+        working-directory: bridge-java
+        run: bash build.sh
 
       - name: Verify exported ABI symbols
         run: |

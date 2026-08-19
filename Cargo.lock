@@ -94,7 +94,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chat-bot"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "morrow",
 ]
@@ -290,7 +290,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hello-morrow"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "morrow",
 ]
@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "morrow"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "morrow-macros",
  "serde",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "morrow-macros"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -428,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "morrow-runtime"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "libloading",
  "log",
@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "motd"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "morrow",
  "serde",

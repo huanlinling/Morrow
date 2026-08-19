@@ -307,7 +307,7 @@ Memory:
 | 次要 | mixin 类 class version 65 > 声明 JAVA_17（启动一条 WARN） | ⚠️ 无功能影响（e2e 实测）；桥接必须 release 21 编译（FFM preview），后续评估 |
 
 e2e 验证命令：
-`java --enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.net=ALL-UNNAMED -javaagent:bridge-java/build/libs/morrow-host-0.1.0-agent.jar -jar server.jar nogui`
+`java --enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.net=ALL-UNNAMED -javaagent:bridge-java/build/libs/morrow-host-1.0.0-agent.jar -jar server.jar nogui`
 
 **✅ 已验收（2026-08-19）**：`mixin applied: net.minecraft.server.MinecraftServer`（无 InvalidInjectionException）→ `Morrow loading...` → 3 个 mod 经真实 loader 加载（依赖重试生效）→ `Morrow ready. 3 mod(s).` → tick 事件持续流入（hello-morrow tick 200~2800+）→ SIGTERM 触发 server_stop（`Bye!`）。
 

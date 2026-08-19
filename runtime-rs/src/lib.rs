@@ -3,7 +3,7 @@
 //! This is the Rust cdylib loaded by the Java host via Panama FFM.
 //! All public symbols are `extern "C"` and use the platform C ABI.
 //!
-//! State model: every runtime handle maps to exactly one [`RuntimeKernel`]
+//! State model: every runtime handle maps to exactly one `RuntimeKernel`
 //! in the global `RUNTIMES` table. All per-runtime registries live inside
 //! the kernel and die with it — `morrow_shutdown` cannot leak state.
 

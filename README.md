@@ -49,9 +49,25 @@ make package-hello
 
 # Run Minecraft (dev mode)
 cd bridge-java && ./gradlew runServer
-
-# Production: java -javaagent:morrow.jar -jar server.jar
 ```
+
+### Production (standalone agent, no Fabric)
+
+```bash
+# 1. Build the agent jar → bridge-java/build/libs/morrow-host-1.0.0-agent.jar
+cd bridge-java && ./gradlew agentJar
+
+# 2. Drop .morrow packages into the server's mods/ directory
+
+# 3. Start the server (verified on Minecraft 1.20.1, JDK 21)
+java --enable-preview --enable-native-access=ALL-UNNAMED \
+     --add-opens java.base/java.net=ALL-UNNAMED \
+     -javaagent:morrow-host-1.0.0-agent.jar \
+     -jar server.jar nogui
+```
+
+Expect in the log: `mixin applied: net.minecraft.server.MinecraftServer`
+→ `Morrow loading...` → `Morrow ready. N mod(s).` → mod tick events.
 
 ## Architecture
 
