@@ -3,7 +3,11 @@
     "package": "com.morrow.mixin",
     "compatibilityLevel": "JAVA_17",
     "mixins": [
-        "MinecraftServerMixinVanilla"
+        "MinecraftServerMixinVanilla",
+        "MorrowPlayerListMixinVanilla",
+        "MorrowChatMixinVanilla",
+        "MorrowGameModeMixinVanilla",
+        "MorrowDeathMixinVanilla"
     ],
     "injectors": {
         "defaultRequire": 1

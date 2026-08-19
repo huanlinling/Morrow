@@ -113,16 +113,33 @@ public class MorrowMod {
         eventBuffer.tick(tick);
     }
 
+    // ─── Game events (called from Mixin injection points) ───
+    // Capture lives in the mixins; these just forward to the batch buffer.
+
+    public static void onPlayerJoin(String name) { eventBuffer.playerJoin(name); }
+    public static void onPlayerLeave(String name) { eventBuffer.playerLeave(name); }
+    public static void onChat(String player, String msg) { eventBuffer.chat(player, msg); }
+    public static void onBlockBreak(String player, String block) { eventBuffer.blockBreak(player, block); }
+    public static void onBlockPlace(String player, String block) { eventBuffer.blockPlace(player, block); }
+    public static void onPlayerDeath(String player) { eventBuffer.playerDeath(player); }
+
     /** Flush accumulated events to Rust in one FFM call. */
     public static void flushBatch() {
-        if (dispatchBatch == null || eventBuffer.isEmpty()) return;
-        try {
-            // EventBuffer owns a per-tick confined arena — the segment is
-            // native memory, no Java-heap copy, no Arena.global() growth.
-            var seg = eventBuffer.finish();
-            dispatchBatch.invokeExact(runtimeHandle, seg, eventBuffer.size());
-        } catch (Throwable e) { log("ERROR", "batch: " + e.getMessage()); }
-        finally { eventBuffer.reset(); } // close arena + start the next tick clean
+        if (dispatchBatch == null) return;
+        // Hold the EventBuffer monitor across finish → dispatch → reset:
+        // a Netty-thread append between finish and the downcall would
+        // write into the segment Rust is reading (torn batch); one after
+        // reset would miss the batch entirely.
+        synchronized (eventBuffer) {
+            if (eventBuffer.isEmpty()) return;
+            try {
+                // EventBuffer owns a per-tick arena — the segment is
+                // native memory, no Java-heap copy, no Arena.global() growth.
+                var seg = eventBuffer.finish();
+                dispatchBatch.invokeExact(runtimeHandle, seg, eventBuffer.size());
+            } catch (Throwable e) { log("ERROR", "batch: " + e.getMessage()); }
+            finally { eventBuffer.reset(); } // close arena + start the next tick clean
+        }
     }
 
     // ─── Shutdown (called from Mixin) ────────────

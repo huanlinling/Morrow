@@ -311,6 +311,25 @@ e2e 验证命令：
 
 **✅ 已验收（2026-08-19）**：`mixin applied: net.minecraft.server.MinecraftServer`（无 InvalidInjectionException）→ `Morrow loading...` → 3 个 mod 经真实 loader 加载（依赖重试生效）→ `Morrow ready. 3 mod(s).` → tick 事件持续流入（hello-morrow tick 200~2800+）→ SIGTERM 触发 server_stop（`Bye!`）。
 
+## M9：事件捕获补全（2026-08-19，全链路 e2e 实测）
+
+生产侧此前只有 tick 有注入点，其余 6 类事件（join/leave/chat/break/place/death）管道全通但游戏侧无触发。M9 补齐：
+
+| 事件 | dev 注入点（yarn） | vanilla 注入点（混淆，javap 验证） | e2e |
+|------|-------------------|-----------------------------------|-----|
+| join | PlayerManager.onPlayerConnect RETURN | alk.a(sd,aig) RETURN | ✅ 假客户端进服 → `+ Steve` + chat-bot 欢迎广播 |
+| leave | PlayerManager.remove HEAD | alk.c(aig) HEAD | ✅ 断开 → `- Steve` |
+| chat | ServerPlayNetworkHandler.onChatMessage HEAD | aiy.a(zi) HEAD | ✅ `<Steve> hi morrow` + chat-bot 回复 |
+| death | ServerPlayerEntity.onDeath HEAD | aig.a(ben) HEAD | ✅ 控制台 `/kill` → `Steve died` |
+| break | ServerPlayerInteractionManager.tryBreakBlock RETURN | aih.a(gu)Z RETURN | ⚠️ 注入已应用；协议级测试（客户端挖方块）待真客户端 |
+| place | ServerPlayerInteractionManager.interactBlock RETURN | aih.a(aig,cmm,cfz,bdw,eee) RETURN | ⚠️ 同上 |
+
+**关键工程项（本轮踩坑记录）：**
+1. **默认包 + Mixin 包要求**：vanilla 事件 mixin 必须默认包编写（javac 禁止命名包引用混淆类型），但 Mixin 配置必须有 package → 构建期**常量池字节手术**：追加 Utf8 条目 + 把所有指向旧名的 Class 条目重指到新名（this_class、私有 helper 的 invokestatic owner）。`-g:none` 编译避免 LVT 里的默认包 `this` 类型。
+2. **签名冲突 + 加载器**：`ChildFirstLoader`（M7 已修）；`@Coerce Object` 处理器参数使 mixin 类可在无游戏类的 loader 下加载（transform 期 eager 解析）。
+3. **线程模型**：chat/break/place 在 Netty IO 线程触发（非 server 线程）→ EventBuffer 改 `Arena.ofShared()` + 全方法 synchronized + flush 全周期持锁（confined arena 会 WrongThreadException 炸连接）。
+4. **假客户端**（/tmp/fake_client.py，离线模式协议 763）：handshake → login（zlib 压缩，低于阈值 256 的包不压缩）→ chat（LastSeenMessages bitset 是固定 3 字节）→ 断连。
+
 ---
 
 ## Milestone 8: v1.0 Release

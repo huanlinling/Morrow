@@ -93,11 +93,105 @@ def vanillaMixin = tasks.register('compileVanillaMixin', JavaCompile) {
     destinationDirectory = layout.buildDirectory.dir('vanilla-mixin')
     options.compilerArgs += ['-proc:none']
     options.release = 21
+    // No debug info: javac's LVT would type the `this` rows with the
+    // default-package mixin name, and Mixin's LVT transformer then asks
+    // getClassNode() for a name that no longer exists after relocation.
+    // Without LVT the injected code simply carries no debug mapping.
+    options.debug = false
+}
+
+// The vanilla event mixins are authored in the DEFAULT package (javac
+// forbids named packages from referencing the obfuscated default-package
+// game classes) — but Mixin refuses configs without a package. Relocate
+// just the mixin classes into com.morrow.mixin post-compile; their
+// signatures still reference the default-package game types, which is
+// what the runtime sees. ServerApiVanilla stays default-package
+// (ChildFirstLoader finds it by that name).
+def relocateVanillaMixins = tasks.register('relocateVanillaMixins') {
+    dependsOn vanillaMixin
+    def srcDir = layout.buildDirectory.dir('vanilla-mixin')
+    def outDir = layout.buildDirectory.dir('vanilla-mixin-pkg')
+    inputs.dir(srcDir)
+    outputs.dir(outDir)
+    def relocated = ['MorrowPlayerListMixinVanilla', 'MorrowChatMixinVanilla',
+                     'MorrowGameModeMixinVanilla', 'MorrowDeathMixinVanilla'] as Set
+    doLast {
+        def dir = srcDir.get().asFile
+        dir.eachFileRecurse { f ->
+            if (!f.name.endsWith('.class')) return
+            def bytes = f.bytes
+            def cls = f.name - '.class'
+            if (cls in relocated) {
+                // Constant-pool surgery: every CP Class entry pointing at
+                // the default-package name (this_class, invokestatic owners
+                // of private helpers, LVT rows) is re-pointed at the Utf8
+                // of the relocated name — which javac already emitted for
+                // this_class. Pure index patching, no length changes; all
+                // other type references stay default-package, matching the
+                // real game classes at runtime.
+                def newName = 'com/morrow/mixin/' + cls
+                def count = ((bytes[8] & 0xFF) << 8) | (bytes[9] & 0xFF)
+                def entryStart = [:] as Map<Integer,Integer>
+                def tagAt = [:] as Map<Integer,Integer>
+                def utf8Idx = [:] as Map<Integer,String>
+                int off = 10
+                for (int i = 1; i < count; i++) {
+                    entryStart[i] = off
+                    int tag = bytes[off] & 0xFF
+                    tagAt[i] = tag
+                    switch (tag) {
+                        case 1:
+                            int len = ((bytes[off+1] & 0xFF) << 8) | (bytes[off+2] & 0xFF)
+                            utf8Idx[i] = new String(bytes, off+3, len, 'UTF-8')
+                            off += 3 + len
+                            break
+                        case 3: case 4: off += 5; break
+                        case 5: case 6: off += 9; i++; break
+                        case 7: case 8: case 16: case 19: case 20: off += 3; break
+                        case 9: case 10: case 11: case 12: case 17: case 18: off += 5; break
+                        case 15: off += 4; break
+                        default: throw new RuntimeException("unexpected CP tag $tag in $cls")
+                    }
+                }
+                // The new name appears nowhere in the pool yet — append a
+                // Utf8 entry at the end (nothing references absolute CP
+                // offsets, only indexes) and bump constant_pool_count.
+                def newBytes = new byte[bytes.length + 3 + newName.length()]
+                System.arraycopy(bytes, 0, newBytes, 0, off)
+                newBytes[off] = 1
+                newBytes[off+1] = (byte) (newName.length() >> 8)
+                newBytes[off+2] = (byte) (newName.length() & 0xFF)
+                System.arraycopy(newName.getBytes('UTF-8'), 0, newBytes, off+3, newName.length())
+                System.arraycopy(bytes, off, newBytes, off + 3 + newName.length(), bytes.length - off)
+                int newIdx = count
+                newBytes[8] = (byte) ((count + 1) >> 8)
+                newBytes[9] = (byte) ((count + 1) & 0xFF)
+                bytes = newBytes
+                tagAt.each { idx, tag ->
+                    if (tag == 7) {
+                        int nameIdx = ((bytes[entryStart[idx]+1] & 0xFF) << 8) | (bytes[entryStart[idx]+2] & 0xFF)
+                        if (utf8Idx[nameIdx] == cls) {
+                            bytes[entryStart[idx]+1] = (byte) (newIdx >> 8)
+                            bytes[entryStart[idx]+2] = (byte) (newIdx & 0xFF)
+                        }
+                    }
+                }
+                def out = new File(outDir.get().asFile, 'com/morrow/mixin/' + cls + '.class')
+                out.parentFile.mkdirs()
+                out.bytes = bytes
+            } else {
+                def rel = dir.toPath().relativize(f.toPath()).toString()
+                def out = new File(outDir.get().asFile, rel)
+                out.parentFile.mkdirs()
+                out.bytes = bytes
+            }
+        }
+    }
 }
 
 tasks.register('agentJar', Jar) {
     dependsOn tasks.named('jar')
-    dependsOn vanillaMixin
+    dependsOn relocateVanillaMixins
     archiveClassifier = 'agent'
     // Agent-only resources FIRST so they win duplicate resolution:
     // the service entries claiming the vanilla host role, the property
@@ -106,7 +200,7 @@ tasks.register('agentJar', Jar) {
     // rewrites the dev jar's mixins.json (adds its refmap) and generates
     // its own refmap files — all three are dev-only and dropped here.
     from('src/main/resources-agent')
-    from(vanillaMixin.map { it.destinationDirectory })
+    from(relocateVanillaMixins.map { it.outputs.files })
     from(zipTree(tasks.named('jar').flatMap { it.archiveFile })) {
         exclude 'morrow.mixins.json', 'morrow-refmap.json', 'morrow-host-refmap.json'
     }
