@@ -1,6 +1,7 @@
 package com.morrow.mixin;
 
 import com.morrow.host.MorrowMod;
+import com.morrow.host.ServerApiFabric;
 import net.minecraft.server.MinecraftServer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -14,7 +15,7 @@ public abstract class MinecraftServerMixin {
 
     @Inject(method = "loadWorld", at = @At("RETURN"))
     private void onLoadWorld(CallbackInfo ci) {
-        MorrowMod.init((MinecraftServer) (Object) this);
+        MorrowMod.init(new ServerApiFabric((MinecraftServer) (Object) this));
     }
 
     @Inject(method = "tick", at = @At("HEAD"))

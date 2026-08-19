@@ -27,6 +27,10 @@ public class MorrowAgent {
         MixinBootstrap.init();
         MixinEnvironment.getDefaultEnvironment()
                 .setSide(MixinEnvironment.Side.SERVER);
+        // The vanilla server runs Mojang's obfuscated production names; the
+        // agent jar's refmap carries them under the "searge" namespace,
+        // which is mixin's default refmap remapping environment
+        // (resources-agent/morrow-refmap.json).
         Mixins.getConfigs();
 
         System.out.println("[Morrow] Mixin initialized. Waiting for Minecraft...");

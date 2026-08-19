@@ -301,12 +301,15 @@ Memory:
 | 宿主服务 | fabric fork 无 vanilla host service | ✅ `MixinServiceVanilla`（Knot 同款直接实现）+ `MixinServiceVanillaBootstrap`（检测 Fabric/Forge 让位） |
 | 全局属性 | `IGlobalPropertyService` 无 vanilla 实现 | ✅ `VanillaGlobalPropertyService`（仅进 agent jar） |
 | 配置时机 | premain 注册 config → 目标全 "not found"（bundler 运行时才解包游戏 jar） | ✅ 推迟到 `net.minecraft.server.Main` 首次转换时注册；class provider 双 loader 查找（游戏类走 bundler loader，mixin 类走 system loader） |
-| 注入映射 | **vanilla 正式 jar 是混淆名**：`@Inject(method="loadWorld")` 找不到目标（dev 的 yarn 名 ≠ 生产混淆名） | ⚠️ 最后一步：需要 refmap（loom production mappings 生成官方名→混淆名映射）。全链路已实测到 "mixin applied"（服务→配置选择→目标解析→apply→audit 全部打通），仅注入点解析因名字失败 |
-| 次要 | mixin 类 class version 65 > 声明 JAVA_17（启动一条 WARN） | ⚠️ 无功能影响；桥接必须 release 21 编译（FFM preview），后续评估 |
+| 注入映射 | **vanilla 正式 jar 是混淆名**：`@Inject(method="loadWorld")` 找不到目标（dev 的 yarn 名 ≠ 生产混淆名） | ✅ 不做 refmap，改用**混淆名 twin mixin**：`MinecraftServerMixinVanilla`（`n_()` / `a(BooleanSupplier)` / `t()`，1.20.1 javap 验证）+ `ServerApiVanilla` 适配器（默认包，持有全部混淆签名）。宿主重构为 game-free 核心 + per-mode `ServerApi`（Fabric=yarn / Vanilla=混淆） |
+| 类加载 | host 类对 game loader 不可见（bundler parent=platform） | ✅ `HostLink` 反射 `addURL` 把 agent jar 追加进 game loader（需 `--add-opens java.base/java.net=ALL-UNNAMED`） |
+| 签名冲突 | `ServerApiVanilla` 在默认包，与 Mojang 签名的游戏类同包 → `SecurityException` | ✅ `ChildFirstLoader`：默认包类 child-first 定义（子 loader 内无签名冲突），命名类型 parent-first 保类身份 |
+| 次要 | mixin 类 class version 65 > 声明 JAVA_17（启动一条 WARN） | ⚠️ 无功能影响（e2e 实测）；桥接必须 release 21 编译（FFM preview），后续评估 |
 
-e2e 验证命令（待 refmap 修复后重跑）：
-`java --enable-preview --enable-native-access=ALL-UNNAMED -javaagent:bridge-java/build/libs/morrow-host-0.1.0-agent.jar -jar server.jar nogui`
-验收：日志出现 `mixin applied: net.minecraft.server.MinecraftServer` 且无 `InvalidInjectionException`，随后 `Morrow loading...` + mod tick 事件。
+e2e 验证命令：
+`java --enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.net=ALL-UNNAMED -javaagent:bridge-java/build/libs/morrow-host-0.1.0-agent.jar -jar server.jar nogui`
+
+**✅ 已验收（2026-08-19）**：`mixin applied: net.minecraft.server.MinecraftServer`（无 InvalidInjectionException）→ `Morrow loading...` → 3 个 mod 经真实 loader 加载（依赖重试生效）→ `Morrow ready. 3 mod(s).` → tick 事件持续流入（hello-morrow tick 200~2800+）→ SIGTERM 触发 server_stop（`Bye!`）。
 
 ---
 

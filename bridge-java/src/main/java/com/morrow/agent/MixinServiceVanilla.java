@@ -52,7 +52,9 @@ public class MixinServiceVanilla implements IMixinService, IClassProvider,
 
     @Override
     public void prepare() {
-        // Side is set explicitly in MorrowAgent.premain; nothing to do.
+        // Obfuscation context is set in MorrowAgent.premain after
+        // MixinBootstrap.init() — this method runs during MixinBootstrap's
+        // static init, before the environment exists.
     }
 
     @Override

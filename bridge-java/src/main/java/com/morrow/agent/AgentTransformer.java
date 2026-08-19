@@ -55,6 +55,16 @@ final class AgentTransformer implements ClassFileTransformer {
         }
         if (name.startsWith("net/minecraft/")) {
             currentLoader = loader;
+            // One-time: make the host classes visible to the game loader.
+            // The vanilla bundler creates the game classloader as
+            // URLClassLoader(urls, systemLoader.getParent()) — parent is
+            // the PLATFORM loader, so game classes can never see the app
+            // classpath (agent jar included). Injected mixin calls into
+            // com.morrow.host.* would fail with NoClassDefFoundError when
+            // they execute inside MinecraftServer. Adding the agent jar to
+            // the game loader's own URLs fixes it; requires
+            // --add-opens java.base/java.net=ALL-UNNAMED on the launch line.
+            HostLink.install(loader);
         }
         if (name.equals("net/minecraft/server/Main") && !configRegistered) {
             configRegistered = true;

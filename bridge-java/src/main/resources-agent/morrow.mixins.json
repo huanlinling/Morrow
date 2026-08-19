@@ -1,0 +1,11 @@
+{
+    "required": true,
+    "package": "com.morrow.mixin",
+    "compatibilityLevel": "JAVA_17",
+    "mixins": [
+        "MinecraftServerMixinVanilla"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}
