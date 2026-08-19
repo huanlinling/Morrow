@@ -73,9 +73,10 @@ java --enable-preview --enable-native-access=ALL-UNNAMED \
 
 echo ""
 echo "==> Step 8: Agent premain smoke (standalone Mixin bootstrap)..."
-AGENT_JAR="build/libs/morrow-host-0.1.0-agent.jar"
-if [ ! -f "$AGENT_JAR" ]; then
+AGENT_JAR=$(ls build/libs/morrow-host-*-agent.jar 2>/dev/null | head -1)
+if [ -z "$AGENT_JAR" ]; then
     ./gradlew --no-daemon -q agentJar
+    AGENT_JAR=$(ls build/libs/morrow-host-*-agent.jar | head -1)
 fi
 AGENT_OUT=$(java --enable-preview -javaagent:"$AGENT_JAR" -version 2>&1)
 if ! echo "$AGENT_OUT" | grep -q "Mixin initialized"; then
