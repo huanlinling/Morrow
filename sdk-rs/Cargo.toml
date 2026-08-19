@@ -2,9 +2,14 @@
 name = "morrow"
 version = "1.0.0"
 edition = "2021"
-description = "Morrow SDK — Rust crate for building Minecraft mods"
+description = "Morrow SDK — write Minecraft mods in Rust, run at native speed"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/huanlinling/Morrow"
+keywords = ["minecraft", "mod", "modding", "ffi"]
+categories = ["game-development", "api-bindings"]
+readme = "../README.md"
 
 [dependencies]
-morrow-macros = { path = "morrow-macros" }
+morrow-macros = { path = "morrow-macros", version = "1.0.0" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

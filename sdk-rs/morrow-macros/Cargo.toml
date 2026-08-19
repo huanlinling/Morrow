@@ -3,6 +3,11 @@ name = "morrow-macros"
 version = "1.0.0"
 edition = "2021"
 description = "Proc macros for the Morrow modding SDK"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/huanlinling/Morrow"
+keywords = ["minecraft", "mod", "modding", "proc-macro"]
+categories = ["game-development"]
+readme = "../../README.md"
 
 [lib]
 proc-macro = true
