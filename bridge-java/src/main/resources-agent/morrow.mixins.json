@@ -7,7 +7,8 @@
         "MorrowPlayerListMixinVanilla",
         "MorrowChatMixinVanilla",
         "MorrowGameModeMixinVanilla",
-        "MorrowDeathMixinVanilla"
+        "MorrowDeathMixinVanilla",
+        "MorrowPlaceSelfTestMixin"
     ],
     "injectors": {
         "defaultRequire": 1

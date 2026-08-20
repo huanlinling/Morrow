@@ -322,7 +322,7 @@ e2e 验证命令：
 | chat | ServerPlayNetworkHandler.onChatMessage HEAD | aiy.a(zi) HEAD | ✅ `<Steve> hi morrow` + chat-bot 回复 |
 | death | ServerPlayerEntity.onDeath HEAD | aig.a(ben) HEAD | ✅ 控制台 `/kill` → `Steve died` |
 | break | ServerPlayerInteractionManager.tryBreakBlock HEAD+RETURN | aih.a(gu)Z HEAD+RETURN | ✅ 假客户端挖方块 → `Steve broke minecraft:dirt` |
-| place | ServerPlayerInteractionManager.interactBlock RETURN | aih.a(aig,cmm,cfz,bdw,eee) RETURN | ⚠️ 注入已应用、处理器机制与 break 同源已验证；vanilla 拒绝了假客户端的 UseItemOn 包（游戏层校验：射线/光标/手持物），方块从未放置，需真客户端复验 |
+| place | ServerPlayerInteractionManager.interactBlock RETURN | aih.a(aig,cmm,cfz,bdw,eee) RETURN | ✅ 自测 mixin 直调 `useItemOn`（绕 vanilla 包校验）→ `CONSUME consumed=true` → `Steve placed minecraft:dirt`。**9/9 事件全部实测通过** |
 
 **关键工程项（本轮踩坑记录）：**
 1. **默认包 + Mixin 包要求**：vanilla 事件 mixin 必须默认包编写（javac 禁止命名包引用混淆类型），但 Mixin 配置必须有 package → 构建期**常量池字节手术**：追加 Utf8 条目 + 把所有指向旧名的 Class 条目重指到新名（this_class、私有 helper 的 invokestatic owner）。`-g:none` 编译避免 LVT 里的默认包 `this` 类型。
@@ -332,6 +332,7 @@ e2e 验证命令：
 5. **break 的双注入**：RETURN 时方块已被破坏（读到恒为 air），HEAD 读名字存 ThreadLocal、RETURN 校验返回值后取用。注意 boolean 返回的方法连 HEAD 注入也必须用 `CallbackInfoReturnable`（Mixin 校验）。
 6. **gz 桩是接口**：DefaultedRegistry 的真实类型是 interface，桩写成 class 导致 invokevirtual → 运行时 `IncompatibleClassChangeError` 崩服。
 7. 协议细节：block_dig=0x1D、block_place=0x31、position 编码无符号 64 位（Python 负数按位与需显式掩码）、创造模式 set_creative_slot=0x2b（dirt item id=9，槽位 36=快捷栏 0）。
+8. **place 自测 mixin**（MorrowPlaceSelfTestMixin，`-Dmorrow.selftest.place=true` 启用，一次性）：vanilla 的 UseItemOn 包校验拒绝假客户端（方块从未放置），自测 mixin 在首个玩家在线时以服务器线程直调 `useItemOn`（合成 eei/ha/eee/cfz），绕过包校验但覆盖 Morrow 全部代码路径 —— `CONSUME consumed=true` + `Steve placed minecraft:dirt` 实测。
 
 ---
 

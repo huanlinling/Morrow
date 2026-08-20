@@ -4,4 +4,5 @@
  *  IncompatibleClassChangeError (found interface, class expected). */
 public interface gz<T> {
     acq b(Object o); // getKey()
+    T a(acq key);    // get(ResourceLocation)
 }

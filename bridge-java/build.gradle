@@ -114,7 +114,8 @@ def relocateVanillaMixins = tasks.register('relocateVanillaMixins') {
     inputs.dir(srcDir)
     outputs.dir(outDir)
     def relocated = ['MorrowPlayerListMixinVanilla', 'MorrowChatMixinVanilla',
-                     'MorrowGameModeMixinVanilla', 'MorrowDeathMixinVanilla'] as Set
+                     'MorrowGameModeMixinVanilla', 'MorrowDeathMixinVanilla',
+                     'MorrowPlaceSelfTestMixin'] as Set
     doLast {
         def dir = srcDir.get().asFile
         dir.eachFileRecurse { f ->

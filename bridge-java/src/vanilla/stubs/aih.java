@@ -2,4 +2,5 @@
 public class aih {
     public aif c; // level
     public aig d; // player
+    public bdx a(aig player, cmm level, cfz stack, bdw hand, eee hit) { return null; } // useItemOn
 }
