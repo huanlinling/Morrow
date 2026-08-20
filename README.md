@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" width="132" alt="Morrow — a dawn mark: crescent moon setting, sun rising over the horizon">
+</p>
+
 # Morrow
 
 > Native Minecraft Mod Loader — write mods in Rust, run at native speed.
@@ -145,7 +149,10 @@ morrow/
 | v0.14: PlayerSnapshot | ✅ |
 | v0.15: SDK Macros + stability fixes | ✅ |
 | v0.16: Architecture hardening | ✅ |
-| M7: Benchmark Suite | ⬜ Next |
+| M7: Benchmark Suite | ✅ |
+| M8: v1.0.0 — crates.io + GitHub Releases | ✅ |
+| M9: 9/9 events end-to-end (CI `agent-e2e`) | ✅ |
+| v1.0.1: Forge-style artifacts, verified on a real server | ✅ |
 
 ## Development
 

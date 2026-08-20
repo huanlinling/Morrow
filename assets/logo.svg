@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Morrow: dawn mark. Night gives way to day — crescent moon setting,
+       sun rising over the horizon. Rounded square echoes the Forge/Fabric
+       loader-family look. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16163a"/>
+      <stop offset="0.55" stop-color="#3b2f6e"/>
+      <stop offset="1" stop-color="#ff6b35"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#sky)"/>
+  <!-- stars -->
+  <circle cx="360" cy="110" r="4" fill="#e6e6f2" opacity="0.85"/>
+  <circle cx="404" cy="168" r="3" fill="#e6e6f2" opacity="0.6"/>
+  <circle cx="316" cy="200" r="2.5" fill="#e6e6f2" opacity="0.5"/>
+  <circle cx="438" cy="92" r="2.5" fill="#e6e6f2" opacity="0.7"/>
+  <!-- crescent moon: outer circle r=100 at (150,190), hole r=84 at
+       (178,190) — the right-shifted hole leaves a thick left crescent -->
+  <path fill-rule="evenodd" fill="#e6e6f2"
+        d="M50 190 A100 100 0 1 0 250 190 A100 100 0 1 0 50 190 Z
+           M94 190 A84 84 0 1 0 262 190 A84 84 0 1 0 94 190 Z"/>
+  <!-- horizon -->
+  <rect x="0" y="430" width="512" height="82" fill="#120f24" opacity="0.6"/>
+  <!-- rising sun -->
+  <path d="M328 430 A92 92 0 0 1 512 430 Z" fill="#ffd27d"/>
+</svg>
