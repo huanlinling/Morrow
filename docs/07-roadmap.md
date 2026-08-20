@@ -321,14 +321,17 @@ e2e 验证命令：
 | leave | PlayerManager.remove HEAD | alk.c(aig) HEAD | ✅ 断开 → `- Steve` |
 | chat | ServerPlayNetworkHandler.onChatMessage HEAD | aiy.a(zi) HEAD | ✅ `<Steve> hi morrow` + chat-bot 回复 |
 | death | ServerPlayerEntity.onDeath HEAD | aig.a(ben) HEAD | ✅ 控制台 `/kill` → `Steve died` |
-| break | ServerPlayerInteractionManager.tryBreakBlock RETURN | aih.a(gu)Z RETURN | ⚠️ 注入已应用；协议级测试（客户端挖方块）待真客户端 |
-| place | ServerPlayerInteractionManager.interactBlock RETURN | aih.a(aig,cmm,cfz,bdw,eee) RETURN | ⚠️ 同上 |
+| break | ServerPlayerInteractionManager.tryBreakBlock HEAD+RETURN | aih.a(gu)Z HEAD+RETURN | ✅ 假客户端挖方块 → `Steve broke minecraft:dirt` |
+| place | ServerPlayerInteractionManager.interactBlock RETURN | aih.a(aig,cmm,cfz,bdw,eee) RETURN | ⚠️ 注入已应用、处理器机制与 break 同源已验证；vanilla 拒绝了假客户端的 UseItemOn 包（游戏层校验：射线/光标/手持物），方块从未放置，需真客户端复验 |
 
 **关键工程项（本轮踩坑记录）：**
 1. **默认包 + Mixin 包要求**：vanilla 事件 mixin 必须默认包编写（javac 禁止命名包引用混淆类型），但 Mixin 配置必须有 package → 构建期**常量池字节手术**：追加 Utf8 条目 + 把所有指向旧名的 Class 条目重指到新名（this_class、私有 helper 的 invokestatic owner）。`-g:none` 编译避免 LVT 里的默认包 `this` 类型。
 2. **签名冲突 + 加载器**：`ChildFirstLoader`（M7 已修）；`@Coerce Object` 处理器参数使 mixin 类可在无游戏类的 loader 下加载（transform 期 eager 解析）。
 3. **线程模型**：chat/break/place 在 Netty IO 线程触发（非 server 线程）→ EventBuffer 改 `Arena.ofShared()` + 全方法 synchronized + flush 全周期持锁（confined arena 会 WrongThreadException 炸连接）。
 4. **假客户端**（/tmp/fake_client.py，离线模式协议 763）：handshake → login（zlib 压缩，低于阈值 256 的包不压缩）→ chat（LastSeenMessages bitset 是固定 3 字节）→ 断连。
+5. **break 的双注入**：RETURN 时方块已被破坏（读到恒为 air），HEAD 读名字存 ThreadLocal、RETURN 校验返回值后取用。注意 boolean 返回的方法连 HEAD 注入也必须用 `CallbackInfoReturnable`（Mixin 校验）。
+6. **gz 桩是接口**：DefaultedRegistry 的真实类型是 interface，桩写成 class 导致 invokevirtual → 运行时 `IncompatibleClassChangeError` 崩服。
+7. 协议细节：block_dig=0x1D、block_place=0x31、position 编码无符号 64 位（Python 负数按位与需显式掩码）、创造模式 set_creative_slot=0x2b（dirt item id=9，槽位 36=快捷栏 0）。
 
 ---
 

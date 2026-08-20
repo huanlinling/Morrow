@@ -24,10 +24,21 @@ public abstract class ServerPlayerInteractionManagerMixin {
     @Shadow @Final protected ServerPlayerEntity player;
     @Shadow protected ServerWorld world;
 
+    /** Block name stashed at HEAD — at RETURN the block is already air. */
+    private static final ThreadLocal<String> BREAK_BLOCK = new ThreadLocal<>();
+
+    // CallbackInfoReturnable even at HEAD: the target returns boolean.
+    @Inject(method = "tryBreakBlock", at = @At("HEAD"))
+    private void morrow$onBreakHead(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
+        BREAK_BLOCK.set(blockName(world, pos));
+    }
+
     @Inject(method = "tryBreakBlock", at = @At("RETURN"))
     private void morrow$onBreak(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
-        if (!cir.getReturnValue()) return;
-        MorrowMod.onBlockBreak(player.getName().getString(), blockName(world, pos));
+        String block = BREAK_BLOCK.get();
+        BREAK_BLOCK.remove();
+        if (!cir.getReturnValue() || block == null) return;
+        MorrowMod.onBlockBreak(player.getName().getString(), block);
     }
 
     @Inject(method = "interactBlock", at = @At("RETURN"))
