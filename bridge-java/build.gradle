@@ -81,23 +81,45 @@ def vanillaStubGen = tasks.register('generateVanillaStub') {
 }
 
 def vanillaMixin = tasks.register('compileVanillaMixin', JavaCompile) {
-    dependsOn tasks.named('compileJava')
     dependsOn vanillaStubs, vanillaStubGen
-    source = files('src/vanilla/java')
+    // ServerApiVanilla compiles separately at 21 (FFM preview API — see
+    // compileServerApiVanilla below).
+    source = fileTree('src/vanilla/java') { exclude 'ServerApiVanilla.java' }
     // NOTE: sourceSets.main.compileClasspath must NOT be here — it carries
     // loom's yarn-mapped minecraft.jar whose MinecraftServer (yarn names)
     // would shadow the ASM stub (obfuscated names) for javac.
-    classpath = files(sourceSets.main.output, configurations.agent,
+    // main.output is deliberately absent too: it is compiled at 21 with
+    // preview flags, which javac at release 17 refuses to read. The
+    // stubs in src/vanilla/stubs (MorrowMod, ServerApi, ChildFirstLoader)
+    // cover the main-set types the mixins reference.
+    classpath = files(configurations.agent,
             vanillaStubs.map { it.destinationDirectory },
             vanillaStubOut)
     destinationDirectory = layout.buildDirectory.dir('vanilla-mixin')
     options.compilerArgs += ['-proc:none']
-    options.release = 21
+    // Class version must match the config's compatibilityLevel (JAVA_17):
+    // mixin 0.8.5's CompatibilityLevel enum tops out at JAVA_18, so a
+    // release-21 class (major 65) exceeds the declared level and warns at
+    // startup. These classes use no Java 21 features.
+    options.release = 17
     // No debug info: javac's LVT would type the `this` rows with the
     // default-package mixin name, and Mixin's LVT transformer then asks
     // getClassNode() for a name that no longer exists after relocation.
     // Without LVT the injected code simply carries no debug mapping.
     options.debug = false
+}
+
+// ServerApiVanilla talks to native memory via the FFM preview API —
+// it must stay at release 21 with preview flags (from the global
+// JavaCompile configuration below).
+def serverApiVanilla = tasks.register('compileServerApiVanilla', JavaCompile) {
+    dependsOn tasks.named('compileJava')
+    dependsOn vanillaStubs, vanillaStubGen
+    source = files('src/vanilla/java/ServerApiVanilla.java')
+    classpath = files(sourceSets.main.output, configurations.agent,
+            vanillaStubs.map { it.destinationDirectory },
+            vanillaStubOut)
+    destinationDirectory = layout.buildDirectory.dir('vanilla-sapi')
 }
 
 // The vanilla event mixins are authored in the DEFAULT package (javac
@@ -108,10 +130,12 @@ def vanillaMixin = tasks.register('compileVanillaMixin', JavaCompile) {
 // what the runtime sees. ServerApiVanilla stays default-package
 // (ChildFirstLoader finds it by that name).
 def relocateVanillaMixins = tasks.register('relocateVanillaMixins') {
-    dependsOn vanillaMixin
+    dependsOn vanillaMixin, serverApiVanilla
     def srcDir = layout.buildDirectory.dir('vanilla-mixin')
+    def sapiDir = layout.buildDirectory.dir('vanilla-sapi')
     def outDir = layout.buildDirectory.dir('vanilla-mixin-pkg')
     inputs.dir(srcDir)
+    inputs.dir(sapiDir)
     outputs.dir(outDir)
     def relocated = ['MorrowPlayerListMixinVanilla', 'MorrowChatMixinVanilla',
                      'MorrowGameModeMixinVanilla', 'MorrowDeathMixinVanilla',
@@ -186,6 +210,12 @@ def relocateVanillaMixins = tasks.register('relocateVanillaMixins') {
                 out.parentFile.mkdirs()
                 out.bytes = bytes
             }
+        }
+        // ServerApiVanilla (compiled at 21 for FFM) passes through
+        // unchanged — it is not a mixin, no relocation needed.
+        sapiDir.get().asFile.eachFile { f ->
+            def out = new File(outDir.get().asFile, f.name)
+            out.bytes = f.bytes
         }
     }
 }
@@ -297,4 +327,13 @@ sourceSets {
 tasks.withType(JavaCompile).configureEach {
     options.compilerArgs += ['--enable-preview']
     options.release = 21
+}
+
+// Registered after the configureEach above, so it wins: the vanilla
+// mixins must compile at 17 (see compileVanillaMixin — matches the
+// config's JAVA_17 compatibility level; 0.8.5's enum has no JAVA_21).
+// Preview features require release 21, so drop the flag as well.
+tasks.named('compileVanillaMixin') {
+    options.release = 17
+    options.compilerArgs -= ['--enable-preview']
 }

@@ -304,7 +304,7 @@ Memory:
 | 注入映射 | **vanilla 正式 jar 是混淆名**：`@Inject(method="loadWorld")` 找不到目标（dev 的 yarn 名 ≠ 生产混淆名） | ✅ 不做 refmap，改用**混淆名 twin mixin**：`MinecraftServerMixinVanilla`（`n_()` / `a(BooleanSupplier)` / `t()`，1.20.1 javap 验证）+ `ServerApiVanilla` 适配器（默认包，持有全部混淆签名）。宿主重构为 game-free 核心 + per-mode `ServerApi`（Fabric=yarn / Vanilla=混淆） |
 | 类加载 | host 类对 game loader 不可见（bundler parent=platform） | ✅ `HostLink` 反射 `addURL` 把 agent jar 追加进 game loader（需 `--add-opens java.base/java.net=ALL-UNNAMED`） |
 | 签名冲突 | `ServerApiVanilla` 在默认包，与 Mojang 签名的游戏类同包 → `SecurityException` | ✅ `ChildFirstLoader`：默认包类 child-first 定义（子 loader 内无签名冲突），命名类型 parent-first 保类身份 |
-| 次要 | mixin 类 class version 65 > 声明 JAVA_17（启动一条 WARN） | ⚠️ 无功能影响（e2e 实测）；桥接必须 release 21 编译（FFM preview），后续评估 |
+| 次要 | mixin 类 class version 65 > 声明 JAVA_17（启动一条 WARN） | ✅ 2026-08-20：mixin 类改按 release 17 编译（class 61 == 声明的 17），WARN 消除。mixin 0.8.5 的 CompatibilityLevel 枚举只到 JAVA_18、无 JAVA_21，只能降类版本不能升声明（曾误试 JSON 升 JAVA_21 → `valueOf` 抛异常穿透 AgentTransformer 的 try/catch 静默失效，零报错）。ServerApiVanilla 因 FFM preview 单独留 21 编译（独立任务 + pass-through）；mixin 编译类路径移除 main.output（preview 类 17 不可读），改用 src/vanilla/stubs 的 MorrowMod/ServerApi/ChildFirstLoader 编译桩（不进 jar，运行时真实类生效）。e2e 9/9 复验无 WARN |
 
 e2e 验证命令：
 `java --enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.net=ALL-UNNAMED -javaagent:bridge-java/build/libs/morrow-host-1.0.0-agent.jar -jar server.jar nogui`
