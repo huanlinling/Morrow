@@ -35,6 +35,8 @@ pub struct RuntimeData {
     /// World snapshot refreshed once per tick (v0.14 PlayerSnapshot) —
     /// only while `snapshot_consumers > 0`.
     pub snapshot: Option<WorldSnapshot>,
+    /// Reusable buffer for the snapshot upcall (taken/put back each tick).
+    pub snapshot_buf: Vec<u8>,
     /// Live consumers of the per-tick WorldSnapshot refresh. Mod-facing
     /// snapshot query APIs increment this on first use; while zero the
     /// refresh upcall (and its O(players) serialization on the Java
@@ -77,6 +79,7 @@ impl RuntimeKernel {
                 commands: CommandRegistry::new(),
                 configs: ConfigStore::new(),
                 snapshot: None,
+                snapshot_buf: Vec::new(),
                 snapshot_consumers: 0,
             }),
             state: Mutex::new(RuntimeState::Ready),

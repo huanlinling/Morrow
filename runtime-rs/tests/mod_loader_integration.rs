@@ -45,8 +45,23 @@ unsafe extern "C" fn test_log(level: u32, ptr: *const u8, len: u32) {
         .push(format!("L{level}:{}", read_str(ptr, len)));
 }
 
-unsafe extern "C" fn test_get_world_snapshot(_buf: *mut u8, _cap: u32) -> u32 {
-    0
+unsafe extern "C" fn test_get_world_snapshot(buf: *mut u8, cap: u32) -> u32 {
+    write_snapshot(buf, cap, &["alice", "bob", "carol", "dave", "erin", "frank", "grace"], 12345)
+}
+
+// Serializes a WorldSnapshot in the host wire layout (u32 count, i64 time,
+// u16-len-prefixed UTF-8 names) — same shape as ServerApiFabric.
+fn write_snapshot(buf: *mut u8, cap: u32, names: &[&str], time: i64) -> u32 {
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(&(names.len() as u32).to_le_bytes());
+    out.extend_from_slice(&time.to_le_bytes());
+    for name in names {
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+    }
+    let n = out.len().min(cap as usize);
+    unsafe { std::ptr::copy_nonoverlapping(out.as_ptr(), buf, n) };
+    n as u32
 }
 
 fn read_str<'a>(ptr: *const u8, len: u32) -> &'a str {
@@ -267,12 +282,15 @@ fn full_load_dispatch_cycle() {
     assert_eq!(handled, 1, "registered command must be handled");
     assert!(sent_contains("pong:hello"), "send_message must reach the host: {:?}", *SENT.lock().unwrap());
 
-    // Command with host API round trip: player_count comes from the vtable
+    // Command with host API round trip: player_count is now SNAPSHOT-backed
+    // (not a direct vtable upcall) — this test never opens the consumer
+    // gate, so the first read is the documented empty value. The positive
+    // path is covered by snapshot_reads_open_the_gate_and_serve_cached_data.
     let count = b"testmod_count";
     let handled =
         morrow_dispatch_command(handle, count.as_ptr(), count.len() as u32, b"".as_ptr(), 0);
     assert_eq!(handled, 1);
-    assert!(sent_contains("players=7;args="));
+    assert!(sent_contains("players=-1;args="));
 
     // Unknown command → 0
     let unknown = b"testmod_nope";
@@ -292,4 +310,62 @@ fn full_load_dispatch_cycle() {
     // Clean shutdown: drops the kernel, registry, and loaded libraries
     let shutdown = morrow_shutdown(handle);
     assert_eq!(shutdown, 0, "shutdown must succeed");
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot consumer gate — reads are snapshot-backed, any-thread safe
+// ---------------------------------------------------------------------------
+
+static SNAP_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+unsafe extern "C" fn test_snap_full(buf: *mut u8, cap: u32) -> u32 {
+    SNAP_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    write_snapshot(buf, cap, &["alice", "bob"], 12345)
+}
+
+#[test]
+fn snapshot_reads_open_the_gate_and_serve_cached_data() {
+    use morrow_runtime::*;
+
+    let handle = morrow_init(ABI_VERSION);
+    assert_ne!(handle, 0);
+
+    let vtable = HostVtable {
+        get_player_count: Some(test_get_player_count),
+        send_message: Some(test_send_message),
+        get_player_list: Some(test_get_player_list),
+        execute_command: Some(test_execute_command),
+        get_world_time: Some(test_get_world_time),
+        log_message: Some(test_log),
+        get_world_snapshot: Some(test_snap_full),
+    };
+    morrow_register_host_api(handle, &vtable);
+
+    // Gate CLOSED: no consumer has queried yet — the per-tick refresh
+    // (and its upcall) must be skipped entirely.
+    let batch = build_batch(&[tick_event(1)]);
+    morrow_dispatch_batch(handle, batch.as_ptr(), batch.len() as u32);
+    assert_eq!(SNAP_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0,
+        "snapshot upcall must not run while the gate is closed");
+
+    // First query: opens the gate, but the first refresh hasn't landed yet.
+    assert_eq!(morrow_get_player_count(handle), -1);
+
+    // Next tick: refresh runs (1 upcall) and the cache serves all reads.
+    let batch = build_batch(&[tick_event(2)]);
+    morrow_dispatch_batch(handle, batch.as_ptr(), batch.len() as u32);
+    assert_eq!(SNAP_CALLS.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(morrow_get_player_count(handle), 2);
+    assert_eq!(morrow_get_world_time(handle), 12345);
+    let mut buf = [0u8; 64];
+    let n = morrow_get_player_list(handle, buf.as_mut_ptr(), buf.len() as u32);
+    assert_eq!(&buf[..n as usize], b"alice,bob");
+
+    // Reads never upcall: the count stays at 1 no matter how many queries.
+    for _ in 0..100 {
+        morrow_get_player_count(handle);
+    }
+    assert_eq!(SNAP_CALLS.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    assert_eq!(morrow_shutdown(handle), 0);
 }

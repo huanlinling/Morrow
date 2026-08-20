@@ -164,12 +164,6 @@ impl HostApi {
         }
     }
 
-    pub fn get_player_count(&self) -> Option<i32> {
-        let guard = self.vtable.lock().unwrap();
-        let func = guard.as_ref()?.get_player_count?;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() })).ok()
-    }
-
     /// Broadcast a chat message. Safe from any thread: on the game main
     /// thread it goes out immediately; from any other thread it is
     /// queued and delivered at the next tick (≤ 50 ms later).
@@ -196,15 +190,6 @@ impl HostApi {
         })).is_ok()
     }
 
-    pub fn get_player_list(&self, buf: &mut [u8]) -> Option<usize> {
-        let guard = self.vtable.lock().unwrap();
-        let func = guard.as_ref()?.get_player_list?;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            func(buf.as_mut_ptr(), buf.len() as u32) as usize
-        }));
-        result.ok().map(|n| n.min(buf.len()))
-    }
-
     /// Execute a console command. Same threading contract as
     /// [`HostApi::send_message`]: immediate on the main thread, queued
     /// to the next tick from any other thread.
@@ -229,12 +214,6 @@ impl HostApi {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             func(bytes.as_ptr(), bytes.len() as u32)
         })).is_ok()
-    }
-
-    pub fn get_world_time(&self) -> Option<i64> {
-        let guard = self.vtable.lock().unwrap();
-        let func = guard.as_ref()?.get_world_time?;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() })).ok()
     }
 
     pub fn log_message(&self, level: u32, msg: &str) -> bool {

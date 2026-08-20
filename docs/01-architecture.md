@@ -28,8 +28,8 @@ java -javaagent / -jar server.jar + morrow.jar（drop 进 mods/）
              ├─ morrow_dispatch_batch：零拷贝解析 wire format →
              │    Arc 快照回调表（1 次引用计数，不克隆 map）→ 锁外逐个
              │    dispatch（每个回调独立 catch_unwind）
-             ├─ WorldSnapshot：消费者门禁——有 mod 查询 API 才每 tick 刷新；
-             │    当前无消费者 API，生产零开销
+             ├─ WorldSnapshot：消费者门禁——读 API（player_count/list/time）
+             │    首次查询开启每 tick 刷新，之后零 upcall、任何线程安全
              └─ Mod A, B, C...（dlopen 的 cdylib，符号发现注册回调）
 ```
 
@@ -100,7 +100,9 @@ src/
   跳过它，其他 mod 与服务器继续运行。
 - 写操作（send_message / execute_command）跨线程安全：非主线程调用进
   outbound 队列，下一 tick 主线程 flush（≤50ms）；主线程调用直达，零延迟。
-  读操作（player_count/list/time）直达游戏，限主线程。
+- 读操作（player_count/list/time）快照支撑：查询自动开启每 tick 世界
+  快照刷新（消费者门禁），数据 ≤1 tick 滞后、任何线程安全、零 upcall；
+  首次刷新落地前返回空值。
 
 ### Layer 4: SDK（sdk-rs + morrow-macros）
 
@@ -121,7 +123,7 @@ tick RETURN flushBatch()：
 Rust 侧：
   1. 解析 u32 count + 逐事件（u16 type + u16 len1 + u16 len2 + payload）
   2. 锁内 Arc 快照：dispatch 表 + host_api（1 次引用计数，无 map 克隆）
-  3. WorldSnapshot 有消费者才 1 次 upcall 刷新（v0.16 无查询 API → 跳过）
+  3. WorldSnapshot 有消费者才 1 次 upcall 刷新（读 API 首次查询即开启）
   4. 锁外逐回调 dispatch，每个 catch_unwind；panic → quarantine
 最后        eventBuffer.reset()：close per-tick arena（内存即时归还）
 ```

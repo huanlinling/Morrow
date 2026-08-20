@@ -372,19 +372,30 @@ pub extern "C" fn morrow_dispatch_batch(
         host_api.flush_outbound();
 
         // Refresh the world snapshot once per tick (1 upcall, not N) —
-        // but only while a mod-facing API actually consumes it. v0.16
-        // ships no snapshot query API, so this skips the upcall and its
-        // O(players) serialization on the Java game thread entirely.
+        // but only while a mod-facing API actually consumes it. With no
+        // consumers this skips the upcall and its O(players) Java-side
+        // serialization entirely. The buffer is kernel-owned and reused
+        // across ticks (ponytail: fixed 64 KiB ceiling ≈ 3000 players ×
+        // 20-char names; grow-with-retry when that ever binds).
         if snapshot_wanted {
-            let mut snap_buf = [0u8; 4096];
+            let mut snap_buf = with_runtime(runtime_handle, |kernel| {
+                std::mem::take(&mut kernel.data().snapshot_buf)
+            })
+            .unwrap_or_default();
+            if snap_buf.capacity() < 65536 {
+                snap_buf = Vec::with_capacity(65536);
+            }
+            snap_buf.resize(65536, 0);
             let snapshot = host_api
                 .get_world_snapshot(&mut snap_buf)
                 .and_then(|n| WorldSnapshot::parse(&snap_buf[..n]));
-            if let Some(snap) = snapshot {
-                with_runtime(runtime_handle, |kernel| {
-                    kernel.data().snapshot = Some(snap);
-                });
-            }
+            with_runtime(runtime_handle, |kernel| {
+                let mut data = kernel.data();
+                if let Some(snap) = snapshot {
+                    data.snapshot = Some(snap);
+                }
+                data.snapshot_buf = snap_buf;
+            });
         }
 
         let mut panicked: Vec<String> = Vec::new();
@@ -526,18 +537,36 @@ pub extern "C" fn morrow_dispatch_batch(
 // Host API (mod → Java upcalls)
 // ---------------------------------------------------------------------------
 
-/// Get the online player count via Java upcall.
+/// Snapshot-backed read shared by the player/world query APIs: bump the
+/// consumer gate (activates the per-tick refresh) and serve from the
+/// cached [`WorldSnapshot`]. Safe from any thread — the game is never
+/// touched directly. Before the first refresh lands (≤ 1 tick after the
+/// first query) returns `empty`.
+fn snapshot_read<F, R>(runtime_handle: u64, empty: R, f: F) -> R
+where
+    F: FnOnce(&WorldSnapshot) -> R,
+    R: Copy,
+{
+    with_runtime(runtime_handle, |kernel| {
+        let mut data = kernel.data();
+        data.snapshot_consumers = data.snapshot_consumers.saturating_add(1);
+        match data.snapshot.as_ref() {
+            Some(snap) => f(snap),
+            None => empty,
+        }
+    })
+    .unwrap_or(empty)
+}
+
+/// Get the online player count from the per-tick world snapshot.
 ///
 /// If `runtime_handle` is 0, uses the first available runtime.
-/// Returns -1 if the host API isn't registered yet.
+/// Returns -1 before the first snapshot refresh (≤ 1 tick after the
+/// first query).
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_get_player_count(runtime_handle: u64) -> i32 {
     panic::ffi_boundary(-1, || {
-        with_runtime(runtime_handle, |kernel| {
-            kernel.data().host_api.get_player_count()
-        })
-        .flatten()
-        .unwrap_or(-1)
+        snapshot_read(runtime_handle, -1, |s| s.player_count as i32)
     })
 }
 
@@ -572,12 +601,17 @@ pub extern "C" fn morrow_get_player_list(
         if buf.is_null() {
             return 0;
         }
-        let buffer = unsafe { std::slice::from_raw_parts_mut(buf, buf_cap as usize) };
-        with_runtime(runtime_handle, |kernel| {
-            kernel.data().host_api.get_player_list(buffer)
+        let joined = with_runtime(runtime_handle, |kernel| {
+            let mut data = kernel.data();
+            data.snapshot_consumers = data.snapshot_consumers.saturating_add(1);
+            data.snapshot.as_ref().map(|s| s.player_names.join(","))
         })
         .flatten()
-        .unwrap_or(0) as u32
+        .unwrap_or_default();
+        let bytes = joined.as_bytes();
+        let n = bytes.len().min(buf_cap as usize);
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n) };
+        n as u32
     })
 }
 
@@ -604,11 +638,7 @@ pub extern "C" fn morrow_execute_command(
 #[unsafe(no_mangle)]
 pub extern "C" fn morrow_get_world_time(runtime_handle: u64) -> i64 {
     panic::ffi_boundary(-1, || {
-        with_runtime(runtime_handle, |kernel| {
-            kernel.data().host_api.get_world_time()
-        })
-        .flatten()
-        .unwrap_or(-1)
+        snapshot_read(runtime_handle, -1, |s| s.world_time)
     })
 }
 

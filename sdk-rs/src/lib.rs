@@ -47,9 +47,9 @@
 //! Thread safety: writes ([`send_message`], [`execute_command`]) are safe
 //! from any thread — off the game main thread the runtime queues them and
 //! delivers on the main thread at the next tick (≤ 50 ms). Reads
-//! ([`player_count`], [`player_list`], [`world_time`]) go straight into
-//! the game and must only be called on the main thread (i.e. from inside
-//! event/tick/command handlers).
+//! ([`player_count`], [`player_list`], [`world_time`]) are snapshot-backed
+//! (a per-tick world cache, opened by the first query, ≤ 1 tick stale,
+//! empty until the first refresh) and are safe from any thread.
 
 pub mod __internal;
 pub mod context;
@@ -101,8 +101,9 @@ pub enum LogLevel {
 // the generated `morrow_mod_init`). Writes (`send_message`,
 // `execute_command`) work from any thread — the runtime marshals
 // off-main-thread calls onto the game main thread. Reads (`player_count`,
-// `player_list`, `world_time`) call into the game directly and are
-// main-thread-only (event/tick/command handlers). If the runtime was
+// `player_list`, `world_time`) are snapshot-backed: they serve a per-tick
+// world cache (opened automatically by the first query, ≤ 1 tick stale,
+// empty until then) and are safe from ANY thread. If the runtime was
 // never initialized (mod code running outside init/handlers, or the
 // library not loaded by the host), these panic with a descriptive
 // message rather than silently no-oping; [`log`] is the exception and
@@ -129,7 +130,8 @@ pub fn player_count() -> i32 {
 /// Online player names. Panics if runtime not set.
 pub fn player_list() -> Vec<String> {
     let api = __internal::api();
-    let mut buf = [0u8; 4096];
+    // Matches the runtime's 64 KiB snapshot buffer ceiling.
+    let mut buf = vec![0u8; 65536];
     let n = unsafe { (api.get_player_list)(0, buf.as_mut_ptr(), buf.len() as u32) };
     parse_player_list(crate::read_str(buf.as_ptr(), n))
 }

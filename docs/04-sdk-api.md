@@ -45,7 +45,8 @@ runtime 会 dlopen 该库并调用生成的 `morrow_mod_init`。
 1. 把 runtime API vtable 存入 per-library 全局 static(任何线程都能调
    用全局 API:写操作 `send_message`/`execute_command` 由 runtime 编组到
    主线程下一 tick 执行;读操作 `player_count`/`player_list`/`world_time`
-   直达游戏,仅限主线程即事件/tick/命令处理器内调用)
+   走每 tick 世界快照,首次查询自动开启刷新、≤1 tick 滞后、任何线程
+   安全,首次刷新落地前返回空值)
 2. 构造 `Context` 传入用户函数
 3. 用 `catch_unwind` 包裹用户函数 — init 中 panic 不会穿过 FFI
    边界 abort,而是记录 `Init panicked: <msg>` 并以失败码返回
