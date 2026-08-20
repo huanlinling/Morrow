@@ -223,7 +223,10 @@ def relocateVanillaMixins = tasks.register('relocateVanillaMixins') {
 tasks.register('agentJar', Jar) {
     dependsOn tasks.named('jar')
     dependsOn relocateVanillaMixins
-    archiveClassifier = 'agent'
+    // Forge-style name: the obfuscated mixin names are pinned to one
+    // Minecraft version (1.20.1), so the artifact name says which.
+    // morrow-host-1.20.1-1.0.0-agent.jar
+    archiveFileName = "morrow-host-${project.minecraft_version}-${project.version}-agent.jar"
     // Agent-only resources FIRST so they win duplicate resolution:
     // the service entries claiming the vanilla host role, the property
     // service, and the agent mixins.json listing the obfuscated-name

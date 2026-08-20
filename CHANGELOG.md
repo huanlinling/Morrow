@@ -13,6 +13,9 @@
 
 ### Host (Java agent)
 
+- Agent jar renamed Forge-style: `morrow-host-1.20.1-1.0.0-agent.jar`
+  (the obfuscated mixin names are pinned to MC 1.20.1, so the artifact
+  name carries the target version)
 - Place events report the block actually placed (click position + face
   offset), not the block clicked at
 - Hermetic end-to-end harness: boots a real vanilla 1.20.1 server, drives

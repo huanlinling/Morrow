@@ -14,7 +14,7 @@ set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER_DIR="${1:-$REPO_ROOT/e2e/.server}"
 SERVER_DIR="$(cd "$SERVER_DIR" 2>/dev/null && pwd || (mkdir -p "$SERVER_DIR" && cd "$SERVER_DIR" && pwd))"
-AGENT_JAR="$REPO_ROOT/bridge-java/build/libs/morrow-host-1.0.0-agent.jar"
+AGENT_JAR="$REPO_ROOT/bridge-java/build/libs/morrow-host-1.20.1-1.0.0-agent.jar"
 SERVER_JAR_URL="https://piston-data.mojang.com/v1/objects/84194a2f286ef7c14ed7ce0090dba59902951553/server.jar"
 FIFO=/tmp/morrow-e2e-in
 LOG="$SERVER_DIR/e2e.log"
