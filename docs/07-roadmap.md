@@ -379,5 +379,5 @@ morrow package                                ✅
 | Server extension API | 低 | 管理面板、监控 |
 | Hot reload | 低 | 开发迭代体验，技术难度高 |
 | macOS (Apple Silicon) | 低 | 等待 Panama 在 macOS 上更稳定 |
-| 自研 Loader | 很低 | 摆脱 Fabric，极长期目标 |
+| 自研 Loader | 很低 | ✅ 已由独立 agent 模式实现（M7 验收：`java -javaagent:... -jar server.jar`，无 Fabric）；本行保留为历史 |
 | WASM sandbox | 很低 | 替代 native lib 的安全方案 |

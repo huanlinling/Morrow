@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased]
+
+### Runtime (Rust)
+
+- Player/world query APIs are snapshot-backed: `player_count`, `player_list`,
+  `world_time` serve a per-tick `WorldSnapshot` cache instead of calling
+  into the game directly. First query opens a consumer gate (refresh lands
+  ≤ 1 tick later, first read returns the empty value); the 64 KiB snapshot
+  buffer is kernel-owned and reused across ticks. Reads are now safe from
+  ANY thread — this supersedes the 1.0.0 "main-thread reads" contract.
+
+### Host (Java agent)
+
+- Place events report the block actually placed (click position + face
+  offset), not the block clicked at
+- Hermetic end-to-end harness: boots a real vanilla 1.20.1 server, drives
+  join/chat/death/leave via a protocol-level fake client and break/place
+  via a self-test mixin (`-Dmorrow.selftest.place=true`) — all nine event
+  kinds verified on a real server; wired into CI as the `agent-e2e` job
+- Vanilla mixins compile at release 17, matching the config's JAVA_17
+  compatibility level — the one-time startup "class version" WARN is gone
+  (mixin 0.8.5's CompatibilityLevel tops out at JAVA_18; ServerApiVanilla
+  keeps FFM preview at release 21 in its own compile task)
+
 ## [1.0.0] — 2026-08-19
 
 First stable release. Rust mods on a vanilla Minecraft 1.20.1 server, no
