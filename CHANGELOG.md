@@ -73,4 +73,4 @@ Fabric required.
 - End-to-end on a real 1.20.1 server: mixin applied → 3 mods loaded →
   tick events → clean shutdown
 
-[1.0.0]: https://github.com/huanlinling/Morrow/releases/tag/v1.0.0
+[1.0.0]: https://github.com/MorrowMC/Morrow/releases/tag/v1.0.0

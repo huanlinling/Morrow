@@ -70,7 +70,7 @@ fn on_chat(player: &str, msg: &str) {
 v1.0.0 targets Minecraft 1.20.1 (JDK 21+). Three example mods ship in
 the repo. Everything is MIT/Apache-2.0.
 
-- GitHub: https://github.com/huanlinling/Morrow
+- GitHub: https://github.com/MorrowMC/Morrow
 - SDK: `cargo add morrow`
 - Docs: architecture, ABI, and benchmark methodology in `docs/`
 
