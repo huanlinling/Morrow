@@ -8,7 +8,7 @@ the classpath.
 ```bash
 java --enable-preview --enable-native-access=ALL-UNNAMED \
      --add-opens java.base/java.net=ALL-UNNAMED \
-     -javaagent:morrow-host-1.20.1-1.0.0-agent.jar \
+     -javaagent:morrow-host-1.20.1-1.0.1-agent.jar \
      -jar server.jar nogui
 ```
 

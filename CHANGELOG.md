@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.1] — 2026-08-20
 
 ### Runtime (Rust)
 
@@ -13,7 +13,7 @@
 
 ### Host (Java agent)
 
-- Agent jar renamed Forge-style: `morrow-host-1.20.1-1.0.0-agent.jar`
+- Agent jar named Forge-style: `morrow-host-1.20.1-1.0.1-agent.jar`
   (the obfuscated mixin names are pinned to MC 1.20.1, so the artifact
   name carries the target version)
 - Place events report the block actually placed (click position + face
