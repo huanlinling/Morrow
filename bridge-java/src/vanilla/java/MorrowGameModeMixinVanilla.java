@@ -49,7 +49,9 @@ public abstract class MorrowGameModeMixinVanilla {
     private void morrow$onPlace(@Coerce Object player, @Coerce Object level, @Coerce Object stack,
                                 @Coerce Object hand, @Coerce Object hit, CallbackInfoReturnable cir) {
         if (!((bdx) cir.getReturnValue()).a()) return; // consumesAction
-        com.morrow.host.MorrowMod.onBlockPlace(name((aig) player), block((cmm) level, ((eee) hit).a()));
+        // Report the PLACED block (clicked pos + face), not the clicked one.
+        com.morrow.host.MorrowMod.onBlockPlace(name((aig) player),
+                block((cmm) level, ((eee) hit).a().a(((eee) hit).b())));
     }
 
     private static String name(Object p) {

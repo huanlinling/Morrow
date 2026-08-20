@@ -45,7 +45,9 @@ public abstract class ServerPlayerInteractionManagerMixin {
     private void morrow$onPlace(ServerPlayerEntity player, World world, ItemStack stack, Hand hand,
                                 BlockHitResult hit, CallbackInfoReturnable<ActionResult> cir) {
         if (!cir.getReturnValue().isAccepted()) return;
-        MorrowMod.onBlockPlace(player.getName().getString(), blockName(world, hit.getBlockPos()));
+        // Report the PLACED block (clicked pos + face), not the clicked one.
+        MorrowMod.onBlockPlace(player.getName().getString(),
+                blockName(world, hit.getBlockPos().offset(hit.getSide())));
     }
 
     private static String blockName(World world, BlockPos pos) {

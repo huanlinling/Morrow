@@ -50,3 +50,30 @@ jobs:
             && echo "hello-morrow exports all 9 event kinds + init"
           nm -D target/release/libtestmod.so | grep -c 'morrow_mod_' | grep -q '10' \
             && echo "testmod fixture exports its 9 event kinds + init"
+
+  agent-e2e:
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build runtime + agent jar + example mods
+        run: |
+          cargo build --release
+          cd bridge-java && ./gradlew --no-daemon agentJar
+          bash scripts/package-mod.sh examples/hello-morrow
+          bash scripts/package-mod.sh examples/chat-bot
+          bash scripts/package-mod.sh examples/motd
+
+      - name: Agent e2e — real vanilla server, all 9 event kinds
+        run: bash e2e/agent-e2e.sh

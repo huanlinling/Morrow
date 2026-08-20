@@ -41,16 +41,30 @@ public abstract class MorrowPlaceSelfTestMixin {
         ran = true; // attempt once, with a player present
 
         try {
+            // Player-relative, terrain-independent: teleport 2 blocks up
+            // (vacating the feet block), place dirt onto the vacated spot
+            // via the ground block's top face, then break it back via an
+            // instant destroyBlock call (bypasses the survival dig timer).
             aig player = (aig) players.get(0);
             aih gm = player.e;
             aif level = (aif) self.a(cmm.h);            // OVERWORLD
+            eei p = player.dg();                        // position()
+            int fx = (int) Math.floor(p.c);
+            int fy = (int) Math.floor(p.d);
+            int fz = (int) Math.floor(p.e);
+
+            player.d(p.c, p.d + 2.0, p.e);              // moveTo: free the feet block
+
             cpn dirt = jb.f.a(new acq("minecraft:dirt"));
             cfz stack = new cfz((cml) dirt);
-            gu target = new gu(-20, 59, -247);
-            eee hit = new eee(new eei(-19.5, 60.0, -246.5), ha.b, target, false);
+            gu ground = new gu(fx, fy - 1, fz);
+            eee hit = new eee(new eei(fx + 0.5, fy + 0.0, fz + 0.5), ha.b, ground, false);
             bdx result = gm.a(player, level, stack, bdw.a, hit); // useItemOn
             System.out.println("[Morrow] place self-test: " + result
                     + " consumed=" + result.a());
+
+            boolean broke = gm.a(new gu(fx, fy, fz));   // destroyBlock (instant)
+            System.out.println("[Morrow] break self-test: broke=" + broke);
         } catch (Throwable t) {
             System.out.println("[Morrow] place self-test FAILED: " + t);
             t.printStackTrace();

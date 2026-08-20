@@ -18,5 +18,8 @@ bridge-java/run/
 .vscode/
 *.iml
 
-# E2E test environment (Mojang server.jar, world, logs)
-e2e/
+# E2E test environment (Mojang server.jar, world, logs) — keep the harness
+e2e/*
+!e2e/fake_client.py
+!e2e/agent-e2e.sh
+e2e/.server/
