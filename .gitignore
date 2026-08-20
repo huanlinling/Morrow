@@ -23,3 +23,7 @@ e2e/*
 !e2e/fake_client.py
 !e2e/agent-e2e.sh
 e2e/.server/
+
+# Claude Code local tooling (not part of the project)
+.claude/
+.agents/
