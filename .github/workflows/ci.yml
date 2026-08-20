@@ -70,7 +70,9 @@ jobs:
       - name: Build runtime + agent jar + example mods
         run: |
           cargo build --release
-          cd bridge-java && ./gradlew --no-daemon agentJar
+          # Subshell: the gradle cd must not leak into the packaging
+          # steps below, which run scripts/ from the repo root.
+          (cd bridge-java && ./gradlew --no-daemon agentJar)
           bash scripts/package-mod.sh examples/hello-morrow
           bash scripts/package-mod.sh examples/chat-bot
           bash scripts/package-mod.sh examples/motd
