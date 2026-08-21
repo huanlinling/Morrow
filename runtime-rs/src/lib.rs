@@ -21,7 +21,7 @@ use abi::handles::{Handle, HandleTable};
 use event::tick::TickCallback;
 use host_api::WorldSnapshot;
 use runtime::RuntimeKernel;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
@@ -326,6 +326,24 @@ fn quarantine_panicked(runtime_handle: u64, panicked: &[String]) {
     });
 }
 
+/// Run every callback in `map` panic-isolated, skipping quarantined mods.
+/// Panicking mod names are collected into `panicked`.
+fn run_isolated<T: Copy>(
+    map: &HashMap<String, T>,
+    quarantined: &HashSet<String>,
+    panicked: &mut Vec<String>,
+    invoke: impl Fn(T),
+) {
+    for (name, cb) in map {
+        if quarantined.contains(name) {
+            continue;
+        }
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(*cb))).is_err() {
+            panicked.push(name.clone());
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Batch event dispatch (1 FFM call/tick) — the production path
 // ---------------------------------------------------------------------------
@@ -411,110 +429,61 @@ pub extern "C" fn morrow_dispatch_batch(
                     if pos + 8 <= data.len() {
                         let tick = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
                         pos += 8;
-                        for (name, cb) in &tables.tick {
-                            if tables.quarantined.contains(name) {
-                                continue;
-                            }
-                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                                cb(tick);
-                            }))
-                            .is_err()
-                            {
-                                eprintln!("[Morrow] Mod '{name}' panicked during tick {tick}");
-                                panicked.push(name.clone());
-                            }
-                        }
+                        run_isolated(&tables.tick, &tables.quarantined, &mut panicked, |cb| unsafe {
+                            cb(tick)
+                        });
                     }
                 }
                 1 | 2 => {
                     // join / leave
                     if pos + f1_len <= data.len() {
+                        let p = data[pos..pos + f1_len].as_ptr();
                         pos += f1_len;
                         let map = if etype == 1 {
                             &tables.events.player_join
                         } else {
                             &tables.events.player_leave
                         };
-                        for (name, cb) in map {
-                            if tables.quarantined.contains(name) {
-                                continue;
-                            }
-                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                                cb(data[pos - f1_len..pos].as_ptr(), f1_len as u32);
-                            }))
-                            .is_err()
-                            {
-                                panicked.push(name.clone());
-                            }
-                        }
+                        run_isolated(map, &tables.quarantined, &mut panicked, |cb| unsafe {
+                            cb(p, f1_len as u32)
+                        });
                     }
                 }
                 3 => {
                     // chat
                     if pos + f1_len + f2_len <= data.len() {
-                        let p_ptr = data[pos..pos + f1_len].as_ptr();
-                        let m_ptr = data[pos + f1_len..pos + f1_len + f2_len].as_ptr();
+                        let p = data[pos..pos + f1_len].as_ptr();
+                        let m = data[pos + f1_len..pos + f1_len + f2_len].as_ptr();
                         pos += f1_len + f2_len;
-                        for (name, cb) in &tables.events.chat_message {
-                            if tables.quarantined.contains(name) {
-                                continue;
-                            }
-                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                                cb(p_ptr, f1_len as u32, m_ptr, f2_len as u32);
-                            }))
-                            .is_err()
-                            {
-                                panicked.push(name.clone());
-                            }
-                        }
+                        run_isolated(&tables.events.chat_message, &tables.quarantined, &mut panicked, |cb| unsafe {
+                            cb(p, f1_len as u32, m, f2_len as u32)
+                        });
                     }
                 }
                 4 | 5 => {
                     // block break/place
                     if pos + f1_len + f2_len <= data.len() {
-                        let p_ptr = data[pos..pos + f1_len].as_ptr();
-                        let b_ptr = data[pos + f1_len..pos + f1_len + f2_len].as_ptr();
+                        let p = data[pos..pos + f1_len].as_ptr();
+                        let b = data[pos + f1_len..pos + f1_len + f2_len].as_ptr();
                         pos += f1_len + f2_len;
                         let map = if etype == 4 {
                             &tables.events.block_break
                         } else {
                             &tables.events.block_place
                         };
-                        for (name, cb) in map {
-                            if tables.quarantined.contains(name) {
-                                continue;
-                            }
-                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                                cb(p_ptr, f1_len as u32, b_ptr, f2_len as u32);
-                            }))
-                            .is_err()
-                            {
-                                panicked.push(name.clone());
-                            }
-                        }
+                        run_isolated(map, &tables.quarantined, &mut panicked, |cb| unsafe {
+                            cb(p, f1_len as u32, b, f2_len as u32)
+                        });
                     }
                 }
                 6 => {
                     // player death
                     if pos + f1_len <= data.len() {
+                        let p = data[pos..pos + f1_len].as_ptr();
                         pos += f1_len;
-                        for (name, cb) in &tables.events.player_death {
-                            if tables.quarantined.contains(name) {
-                                continue;
-                            }
-                            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                                cb(
-                                    data[pos - f1_len..pos].as_ptr(),
-                                    f1_len as u32,
-                                    std::ptr::null(),
-                                    0u32,
-                                );
-                            }))
-                            .is_err()
-                            {
-                                panicked.push(name.clone());
-                            }
-                        }
+                        run_isolated(&tables.events.player_death, &tables.quarantined, &mut panicked, |cb| unsafe {
+                            cb(p, f1_len as u32, std::ptr::null(), 0)
+                        });
                     }
                 }
                 _ => {
