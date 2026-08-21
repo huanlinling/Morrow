@@ -13,7 +13,6 @@ mod event;
 /// Host ↔ runtime ABI types ([`host_api::HostVtable`] is the vtable Java
 /// registers; it is `pub` so integration tests and tooling can build one).
 pub mod host_api;
-mod logger;
 mod mod_loader;
 mod panic;
 mod runtime;
@@ -74,9 +73,6 @@ pub extern "C" fn morrow_init(abi_version: u32) -> u64 {
             );
             return 0;
         }
-
-        // Init logger (only once)
-        logger::init();
 
         let kernel = RuntimeKernel::new();
         let handle = RUNTIMES.insert(kernel);
@@ -357,7 +353,7 @@ pub extern "C" fn morrow_dispatch_batch(
             (
                 data.dispatch.clone(),
                 data.host_api.clone(),
-                data.snapshot_consumers > 0,
+                data.snapshot_wanted,
             )
         });
         let (tables, host_api, snapshot_wanted) = match dispatch {
@@ -549,7 +545,7 @@ where
 {
     with_runtime(runtime_handle, |kernel| {
         let mut data = kernel.data();
-        data.snapshot_consumers = data.snapshot_consumers.saturating_add(1);
+        data.snapshot_wanted = true;
         match data.snapshot.as_ref() {
             Some(snap) => f(snap),
             None => empty,
@@ -603,7 +599,7 @@ pub extern "C" fn morrow_get_player_list(
         }
         let joined = with_runtime(runtime_handle, |kernel| {
             let mut data = kernel.data();
-            data.snapshot_consumers = data.snapshot_consumers.saturating_add(1);
+            data.snapshot_wanted = true;
             data.snapshot.as_ref().map(|s| s.player_names.join(","))
         })
         .flatten()

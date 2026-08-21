@@ -14,7 +14,6 @@ zip = "2"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 libloading = "0.8"
-log = "0.4"
 tempfile = "3"
 
 [dev-dependencies]

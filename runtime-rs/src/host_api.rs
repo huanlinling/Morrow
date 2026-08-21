@@ -241,9 +241,7 @@ impl HostApi {
 // ---------------------------------------------------------------------------
 
 /// Cached world state, refreshed once per tick via a single upcall.
-// Fields read by mod-facing APIs in later milestones.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct WorldSnapshot {
     pub player_count: u32,
     pub world_time: i64,
@@ -297,26 +295,6 @@ impl CommandRegistry {
     /// runtime's data lock — handlers re-enter the API.
     pub fn lookup(&self, name: &str) -> Option<CommandCallback> {
         self.commands.lock().unwrap().get(name).copied()
-    }
-
-    /// Dispatch `args` to the handler for `name`.
-    ///
-    /// The callback is snapshotted under the registry lock and invoked
-    /// with no locks held — handlers may re-enter the runtime API
-    /// (send_message, execute_command, register_command, ...) which
-    /// itself takes the runtime's data lock. Callers must not hold that
-    /// data lock across this call.
-    pub fn dispatch(&self, name: &str, args: &str) -> bool {
-        match self.lookup(name) {
-            Some(cb) => {
-                let b = args.as_bytes();
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    unsafe { cb(b.as_ptr(), b.len() as u32); }
-                }));
-                true
-            }
-            None => false,
-        }
     }
 }
 

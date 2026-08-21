@@ -63,7 +63,8 @@ impl Context {
 
     /// Online player names.
     pub fn player_list(&self) -> Vec<String> {
-        let mut buf = [0u8; 4096];
+        // Matches the runtime's 64 KiB snapshot buffer ceiling.
+        let mut buf = vec![0u8; 65536];
         let n = unsafe {
             (self.api.read().get_player_list)(self.handle, buf.as_mut_ptr(), buf.len() as u32)
         };

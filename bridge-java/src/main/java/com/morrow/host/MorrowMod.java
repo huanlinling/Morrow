@@ -28,8 +28,6 @@ public class MorrowMod {
         System.out.println("[Morrow][" + level + "] " + msg);
     }
 
-    private static final int ABI_VERSION = 0x0001_0000;
-
     private static PanamaBridge bridge;
     private static long runtimeHandle;
     private static ServerApi api;
@@ -58,7 +56,7 @@ public class MorrowMod {
         try {
             var init = bridge.downcall("morrow_init",
                     FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
-            runtimeHandle = (long) init.invokeExact(ABI_VERSION);
+            runtimeHandle = (long) init.invokeExact(PanamaBridge.ABI_VERSION);
         } catch (Throwable e) { log("ERROR", "morrow_init: " + e.getMessage()); return; }
         if (runtimeHandle == 0) { log("ERROR", "ABI mismatch"); return; }
         log("INFO", "Runtime handle=" + runtimeHandle);

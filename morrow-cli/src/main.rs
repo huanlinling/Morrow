@@ -58,7 +58,7 @@ fn cmd_new(name: Option<&str>) {
         dir.join("src/lib.rs"),
         "use morrow::prelude::*;\n\n\
          #[morrow::mod_main]\n\
-         fn init(_ctx: &mut Context, _api: *const RuntimeApi) -> Result<(), MorrowError> {\n    \
+         fn init(_ctx: &mut Context) -> Result<(), MorrowError> {\n    \
          morrow::info!(\"{name} loaded!\");\n    \
          Ok(())\n\
          }\n\n\

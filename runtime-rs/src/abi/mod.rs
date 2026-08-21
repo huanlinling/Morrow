@@ -22,11 +22,7 @@ pub const fn is_abi_compatible(requested: u32, actual: u32) -> bool {
 /// Operation succeeded.
 pub const RESULT_OK: u32 = 0;
 /// Unknown / internal error.
-#[allow(dead_code)]
 pub const RESULT_ERR_UNKNOWN: u32 = 1;
-/// ABI version mismatch — host and runtime are incompatible.
-#[allow(dead_code)]
-pub const RESULT_ERR_ABI_MISMATCH: u32 = 2;
 /// The given handle is invalid (0, or not found in the registry).
 pub const RESULT_ERR_INVALID_HANDLE: u32 = 3;
 /// Illegal state transition (e.g. double shutdown).

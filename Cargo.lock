@@ -438,7 +438,6 @@ name = "morrow-runtime"
 version = "1.0.0"
 dependencies = [
  "libloading",
- "log",
  "serde",
  "tempfile",
  "testmod",

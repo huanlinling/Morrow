@@ -24,13 +24,8 @@ public class PanamaBridge {
     /** Must match {@code abi::ABI_VERSION} in runtime-rs/src/abi/mod.rs. */
     public static final int ABI_VERSION = 0x0001_0000; // v1.0
 
-    // Error codes — mirrors runtime-rs/src/abi/mod.rs
-    public static final int RESULT_OK = 0;
-    public static final int RESULT_ERR_UNKNOWN = 1;
-    public static final int RESULT_ERR_ABI_MISMATCH = 2;
+    // Error codes — mirrors runtime-rs/src/abi/mod.rs (add more when Java checks them)
     public static final int RESULT_ERR_INVALID_HANDLE = 3;
-    public static final int RESULT_ERR_WRONG_STATE = 4;
-    public static final int RESULT_ERR_PANIC = 0xFF;
 
     private final Linker linker;
     private final SymbolLookup lookup;

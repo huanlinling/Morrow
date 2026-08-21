@@ -19,24 +19,12 @@ use std::path::{Path, PathBuf};
 
 /// Information about a loaded mod.
 pub struct LoadedMod {
-    /// The parsed manifest.
-    #[allow(dead_code)]
-    pub manifest: Manifest,
     /// Handle to the dynamically loaded library.
     #[allow(dead_code)] // kept alive so the library stays loaded
     library: libloading::Library,
     /// Temp directory where the artifact was extracted (cleaned up on drop).
     #[allow(dead_code)]
     temp_dir: Option<tempfile::TempDir>,
-    /// Optional tick callback, discovered from `morrow_mod_tick` export.
-    #[allow(dead_code)]
-    pub tick_callback: Option<unsafe extern "C" fn(u64)>,
-    /// Optional lifecycle: server started.
-    #[allow(dead_code)]
-    pub server_start_callback: Option<unsafe extern "C" fn()>,
-    /// Optional lifecycle: server stopping.
-    #[allow(dead_code)]
-    pub server_stop_callback: Option<unsafe extern "C" fn()>,
 }
 
 /// Registry of all loaded mods.
@@ -55,23 +43,12 @@ impl ModRegistry {
         self.mods.insert(name, loaded);
     }
 
-    #[allow(dead_code)]
-    pub fn get(&self, name: &str) -> Option<&LoadedMod> {
-        self.mods.get(name)
-    }
-
     pub fn has(&self, name: &str) -> bool {
         self.mods.contains_key(name)
     }
 
     pub fn len(&self) -> usize {
         self.mods.len()
-    }
-
-    /// Unload all mods (drop their libraries).
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.mods.clear();
     }
 }
 
@@ -275,14 +252,7 @@ pub fn finish_load(
         player_death_callback,
     };
     let name = manifest.package.name.clone();
-    let loaded = LoadedMod {
-        manifest: manifest.clone(),
-        library,
-        temp_dir,
-        tick_callback: exports.tick_callback,
-        server_start_callback: exports.server_start_callback,
-        server_stop_callback: exports.server_stop_callback,
-    };
+    let loaded = LoadedMod { library, temp_dir };
 
     eprintln!("[Morrow] Loaded mod: {name}");
     Ok((loaded, exports, name))

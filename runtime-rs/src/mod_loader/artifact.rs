@@ -20,20 +20,8 @@ impl Platform {
     ///
     /// Examples: "linux-x86_64", "windows-x86_64", "macos-aarch64".
     pub fn dir_name(&self) -> String {
-        let os = match self.os.as_str() {
-            "linux" => "linux",
-            "windows" => "windows",
-            "macos" => "macos",
-            other => other,
-        };
-
-        let arch = match self.arch.as_str() {
-            "x86_64" | "amd64" => "x86_64",
-            "aarch64" => "aarch64",
-            other => other,
-        };
-
-        format!("{os}-{arch}")
+        let arch = if self.arch == "amd64" { "x86_64" } else { &self.arch };
+        format!("{}-{arch}", self.os)
     }
 }
 

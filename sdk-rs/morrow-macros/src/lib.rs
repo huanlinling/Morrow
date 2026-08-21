@@ -16,9 +16,8 @@ use syn::{
 
 /// Marks a function as the entry point for a Morrow mod.
 ///
-/// The function must have one of these signatures:
-/// `fn(&mut Context) -> Result<(), MorrowError>` (recommended)
-/// `fn(&mut Context, *const RuntimeApi) -> Result<(), MorrowError>` (legacy)
+/// The function must have the signature:
+/// `fn(&mut Context) -> Result<(), MorrowError>`
 ///
 /// The macro generates `morrow_mod_init(api: *const RuntimeApi) -> u32`
 /// which the runtime calls. The init body runs inside `catch_unwind` so a
@@ -64,34 +63,19 @@ fn expand_mod_main(input: ItemFn) -> syn::Result<TokenStream> {
             "#[morrow::mod_main] function must not be generic",
         ));
     }
-
-    // Arity 1: fn(&mut Context) -> Result<..>  (recommended)
-    // Arity 2: fn(&mut Context, *const RuntimeApi) -> Result<..>  (legacy)
-    let legacy = match args.len() {
-        1 => false,
-        2 => true,
-        n => {
-            return Err(syn::Error::new_spanned(
-                &input.sig,
-                format!(
-                    "#[morrow::mod_main] function must take `&mut Context` \
-                     (or legacy `&mut Context, *const RuntimeApi`), found {n} arguments"
-                ),
-            ))
-        }
-    };
+    if args.len() != 1 {
+        return Err(syn::Error::new_spanned(
+            &input.sig,
+            format!(
+                "#[morrow::mod_main] function must take `&mut Context`, \
+                 found {} arguments",
+                args.len()
+            ),
+        ));
+    }
 
     check_context_arg(args[0])?;
-    if legacy {
-        check_legacy_api_arg(args[1])?;
-    }
     check_result_return(&input)?;
-
-    let call = if legacy {
-        quote! { #fn_name(&mut ctx, api) }
-    } else {
-        quote! { #fn_name(&mut ctx) }
-    };
 
     let expanded = quote! {
         #original
@@ -103,7 +87,7 @@ fn expand_mod_main(input: ItemFn) -> syn::Result<TokenStream> {
             // Store the API for event-side free functions and logging macros.
             ::morrow::__internal::store_api(api, env!("CARGO_PKG_NAME"));
             let mut ctx = ::morrow::Context::from_api(api, env!("CARGO_PKG_NAME"));
-            match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| #call)) {
+            match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| #fn_name(&mut ctx))) {
                 ::std::result::Result::Ok(::std::result::Result::Ok(())) => 0,
                 ::std::result::Result::Ok(::std::result::Result::Err(e)) => {
                     ::morrow::error!("Init failed: {:?}", e);
@@ -137,29 +121,6 @@ fn check_context_arg(arg: &FnArg) -> syn::Result<()> {
         return Err(syn::Error::new_spanned(
             ty,
             "#[morrow::mod_main] first argument must be `&mut Context`",
-        ));
-    }
-    Ok(())
-}
-
-/// Legacy arg 1 must be `*const RuntimeApi`.
-fn check_legacy_api_arg(arg: &FnArg) -> syn::Result<()> {
-    let FnArg::Typed(PatType { ty, .. }) = arg else {
-        return Err(syn::Error::new_spanned(
-            arg,
-            "#[morrow::mod_main] second argument must be `*const RuntimeApi`",
-        ));
-    };
-    let Type::Ptr(ptr) = &**ty else {
-        return Err(syn::Error::new_spanned(
-            ty,
-            "#[morrow::mod_main] second argument must be `*const RuntimeApi`",
-        ));
-    };
-    if !is_path_named(&ptr.elem, "RuntimeApi") {
-        return Err(syn::Error::new_spanned(
-            ty,
-            "#[morrow::mod_main] second argument must be `*const RuntimeApi`",
         ));
     }
     Ok(())

@@ -32,17 +32,15 @@ pub struct RuntimeData {
     pub host_api: HostApi,
     pub commands: CommandRegistry,
     pub configs: ConfigStore,
-    /// World snapshot refreshed once per tick (v0.14 PlayerSnapshot) —
-    /// only while `snapshot_consumers > 0`.
+    /// World snapshot refreshed once per tick — only while
+    /// `snapshot_wanted` is set.
     pub snapshot: Option<WorldSnapshot>,
     /// Reusable buffer for the snapshot upcall (taken/put back each tick).
     pub snapshot_buf: Vec<u8>,
-    /// Live consumers of the per-tick WorldSnapshot refresh. Mod-facing
-    /// snapshot query APIs increment this on first use; while zero the
-    /// refresh upcall (and its O(players) serialization on the Java
-    /// game thread) is skipped entirely. v0.16 ships no query API, so
-    /// production pays nothing.
-    pub snapshot_consumers: u32,
+    /// Set on the first mod-facing snapshot query. While false the
+    /// per-tick refresh upcall (and its O(players) serialization on the
+    /// Java game thread) is skipped entirely.
+    pub snapshot_wanted: bool,
 }
 
 /// The Morrow Runtime kernel.
@@ -80,7 +78,7 @@ impl RuntimeKernel {
                 configs: ConfigStore::new(),
                 snapshot: None,
                 snapshot_buf: Vec::new(),
-                snapshot_consumers: 0,
+                snapshot_wanted: false,
             }),
             state: Mutex::new(RuntimeState::Ready),
         }
@@ -92,7 +90,7 @@ impl RuntimeKernel {
     }
 
     /// Current runtime state.
-    #[allow(dead_code)] // used in M3+ for state checks
+    #[cfg(test)]
     pub fn state(&self) -> RuntimeState {
         *self.state.lock().unwrap()
     }
@@ -175,6 +173,6 @@ mod tests {
         assert_eq!(data.registry.len(), 0);
         assert!(data.dispatch.events.player_join.is_empty());
         assert_eq!(data.dispatch.quarantined.len(), 0);
-        assert!(!data.commands.dispatch("nope", ""));
+        assert!(data.commands.lookup("nope").is_none());
     }
 }

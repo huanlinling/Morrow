@@ -56,12 +56,6 @@ impl Handle {
             Some(Handle(raw))
         }
     }
-
-    /// Returns true if this is a valid (non-zero) handle.
-    #[allow(dead_code)]
-    pub fn is_valid(self) -> bool {
-        self.0 != 0
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -102,12 +96,6 @@ impl<T: Send + 'static> HandleTable<T> {
         self.entries.lock().unwrap().remove(&handle.0)
     }
 
-    /// Get an owned reference to the object behind a handle.
-    #[allow(dead_code)] // used in M3+ for mod registry lookups
-    pub fn get(&self, handle: Handle) -> Option<Arc<T>> {
-        self.entries.lock().unwrap().get(&handle.0).cloned()
-    }
-
     /// Run `f` with a reference to the entry behind `handle`.
     ///
     /// The entries lock is released before `f` runs, so `f` may re-enter
@@ -143,12 +131,6 @@ impl<T: Send + 'static> HandleTable<T> {
     /// Return the number of live entries.
     pub fn len(&self) -> usize {
         self.entries.lock().unwrap().len()
-    }
-
-    /// True when no handles are allocated.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 
@@ -189,12 +171,12 @@ mod tests {
         let table = HandleTable::new();
         let h = table.insert("hello".to_string());
         assert_eq!(table.len(), 1);
-        assert_eq!(table.get(h).map(|a| a.as_ref().clone()), Some("hello".to_string()));
+        assert_eq!(table.with(h, |s| s.clone()), Some("hello".to_string()));
 
         let removed = table.remove(h);
         assert_eq!(removed.map(|a| a.as_ref().clone()), Some("hello".to_string()));
         assert_eq!(table.len(), 0);
-        assert!(table.get(h).is_none());
+        assert_eq!(table.with(h, |s| s.clone()), None);
     }
 
     #[test]

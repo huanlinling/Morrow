@@ -21,8 +21,6 @@ static NEXT_ERROR_ID: AtomicU64 = AtomicU64::new(1);
 pub struct ErrorRecord {
     pub id: u64,
     pub message: String,
-    #[allow(dead_code)]
-    pub timestamp: std::time::Instant,
 }
 
 /// Thread-safe queue of error records.
@@ -43,7 +41,6 @@ impl ErrorChannel {
         let record = ErrorRecord {
             id,
             message: message.into(),
-            timestamp: std::time::Instant::now(),
         };
         self.queue.lock().unwrap().push_back(record);
         id
@@ -62,12 +59,6 @@ impl ErrorChannel {
         } else {
             None
         }
-    }
-
-    /// Number of pending errors.
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.queue.lock().unwrap().len()
     }
 }
 
