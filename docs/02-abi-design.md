@@ -50,7 +50,7 @@ uint32_t morrow_shutdown(uint64_t runtime_handle);
 
 ```c
 /**
- * 加载一个 .morrow 包
+ * 加载一个 .mor 包
  *
  * @param runtime_handle
  * @param path_ptr         包文件系统路径（UTF-8, pointer+length）

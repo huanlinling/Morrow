@@ -142,7 +142,7 @@ pub extern "C" fn morrow_shutdown(runtime_handle: u64) -> u32 {
 // M3: Mod loading
 // ---------------------------------------------------------------------------
 
-/// Load a `.morrow` package into the given runtime.
+/// Load a `.mor` package into the given runtime.
 ///
 /// # Parameters
 /// - `runtime_handle`: handle from [`morrow_init`]

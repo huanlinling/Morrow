@@ -1,4 +1,4 @@
-//! Mod loader — reads `.morrow` packages, selects platform artifacts,
+//! Mod loader — reads `.mor` packages, selects platform artifacts,
 //! loads native libraries, and calls mod entry points.
 //!
 //! See docs/05-package-format.md and docs/03-lifecycle.md.
@@ -56,7 +56,7 @@ impl ModRegistry {
 // Loader
 // ---------------------------------------------------------------------------
 
-/// Load a `.morrow` package from a file path.
+/// Load a `.mor` package from a file path.
 ///
 /// Steps:
 /// 1. Open the ZIP file
@@ -69,7 +69,7 @@ impl ModRegistry {
 /// 8. Call the entry point
 /// 9. Track the loaded mod in the registry
 ///
-/// Read config.toml from a .morrow package without loading the mod.
+/// Read config.toml from a .mor package without loading the mod.
 pub fn read_zip_config(package_path: &Path) -> Option<Vec<u8>> {
     let file = std::fs::File::open(package_path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
@@ -109,7 +109,7 @@ pub fn prepare_load(
         .map_err(|e| format!("cannot open {}: {e}", package_path.display()))?;
 
     let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("invalid .morrow package: {e}"))?;
+        .map_err(|e| format!("invalid .mor package: {e}"))?;
 
     // 2. Read manifest.toml
     let manifest_contents = read_zip_entry(&mut archive, "manifest.toml")?;
@@ -150,7 +150,7 @@ pub fn finish_load(
     let file = std::fs::File::open(package_path)
         .map_err(|e| format!("cannot open {}: {e}", package_path.display()))?;
     let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("invalid .morrow package: {e}"))?;
+        .map_err(|e| format!("invalid .mor package: {e}"))?;
 
     // 2. Determine platform
     let platform = Platform::detect();

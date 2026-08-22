@@ -4,7 +4,7 @@
 # Usage: e2e/agent-e2e.sh [server-dir]
 #   server-dir: a directory containing server.jar (1.20.1); when absent the
 #   script bootstraps one under the given path (downloads Mojang's jar,
-#   writes eula/server.properties, copies .morrow packages from the repo
+#   writes eula/server.properties, copies .mor packages from the repo
 #   root and bridge-java/build/libs/*-agent.jar).
 #
 # Covers: join, chat, death, leave (protocol-level fake client) and
@@ -39,8 +39,8 @@ server-port=25565
 EOF
 mkdir -p "$SERVER_DIR/mods"
 for pkg in hello-morrow chat-bot motd; do
-    [ -f "$REPO_ROOT/$pkg.morrow" ] && cp "$REPO_ROOT/$pkg.morrow" "$SERVER_DIR/mods/" \
-        && echo "==> mod: $pkg.morrow"
+    [ -f "$REPO_ROOT/$pkg.mor" ] && cp "$REPO_ROOT/$pkg.mor" "$SERVER_DIR/mods/" \
+        && echo "==> mod: $pkg.mor"
 done
 
 # Vanilla loads server.properties/eula/world from the WORKING DIRECTORY.

@@ -4,7 +4,7 @@
 #   • JDK 21          — Java Agent + Panama FFM bridge (需 --enable-preview)
 #   • Rust stable 1.80+ — runtime-rs (cdylib)、sdk-rs、示例模组
 #   • Gradle 8.10     — wrapper 自动下载 (bridge-java, fabric-loom)
-#   • Python 3        — scripts/package-mod.sh 打包 .morrow
+#   • Python 3        — scripts/package-mod.sh 打包 .mor
 #   • make / bash / gcc — Makefile 编排 + Rust 链接器
 #
 # 用法:
@@ -79,9 +79,9 @@ COPY --from=builder /morrow/bridge-java/build/libs/morrow-host-0.1.0.jar /opt/mo
 COPY --from=builder /morrow/target/release/libmorrow_runtime.so /opt/morrow/natives/libmorrow_runtime.so
 # 示例模组 (开发用; 生产请挂载自己的 mods/ 目录)
 # hello-morrow 依赖 chat-bot,必须一起拷
-COPY --from=builder /morrow/hello-morrow.morrow /opt/morrow/mods/hello-morrow.morrow
-COPY --from=builder /morrow/chat-bot.morrow /opt/morrow/mods/chat-bot.morrow
-COPY --from=builder /morrow/motd.morrow /opt/morrow/mods/motd.morrow
+COPY --from=builder /morrow/hello-morrow.mor /opt/morrow/mods/hello-morrow.mor
+COPY --from=builder /morrow/chat-bot.mor /opt/morrow/mods/chat-bot.mor
+COPY --from=builder /morrow/motd.mor /opt/morrow/mods/motd.mor
 
 COPY docker/entrypoint.sh /opt/morrow/entrypoint.sh
 RUN chmod +x /opt/morrow/entrypoint.sh \
@@ -101,9 +101,9 @@ ENTRYPOINT ["/opt/morrow/entrypoint.sh"]
 FROM builder AS dev
 
 # 示例模组包 (入口脚本会拷进服务端 cwd 的 mods/; hello-morrow 依赖 chat-bot)
-COPY --from=builder /morrow/hello-morrow.morrow /opt/morrow/mods/hello-morrow.morrow
-COPY --from=builder /morrow/chat-bot.morrow /opt/morrow/mods/chat-bot.morrow
-COPY --from=builder /morrow/motd.morrow /opt/morrow/mods/motd.morrow
+COPY --from=builder /morrow/hello-morrow.mor /opt/morrow/mods/hello-morrow.mor
+COPY --from=builder /morrow/chat-bot.mor /opt/morrow/mods/chat-bot.mor
+COPY --from=builder /morrow/motd.mor /opt/morrow/mods/motd.mor
 
 COPY docker/dev-entrypoint.sh /opt/morrow/dev-entrypoint.sh
 RUN chmod +x /opt/morrow/dev-entrypoint.sh

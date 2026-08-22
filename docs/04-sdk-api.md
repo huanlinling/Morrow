@@ -148,7 +148,7 @@ morrow::error!("Failed: {}", err);
 
 ## 配置
 
-- 打包时把 `config.toml` 放进 mod 目录即随 `.morrow` 包分发。
+- 打包时把 `config.toml` 放进 mod 目录即随 `.mor` 包分发。
 - 读取按 **cargo 包名**(`CARGO_PKG_NAME`)键控 — 需与
   `manifest.toml` 的 `[package] name` 一致。
 - 推荐类型化读取:`ctx.config::<T>()`,结构体 derive

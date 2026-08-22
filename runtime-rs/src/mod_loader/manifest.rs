@@ -1,10 +1,10 @@
-//! Manifest parsing for `.morrow` packages.
+//! Manifest parsing for `.mor` packages.
 //!
 //! See docs/05-package-format.md for the specification.
 
 use serde::Deserialize;
 
-/// Parsed manifest.toml from a .morrow package.
+/// Parsed manifest.toml from a .mor package.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     pub package: PackageMeta,

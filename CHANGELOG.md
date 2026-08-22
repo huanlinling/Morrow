@@ -42,7 +42,7 @@ Fabric required.
   down the server
 - `send_message` / `execute_command` are safe from mod-spawned threads —
   writes are marshaled onto the game main thread at the next tick
-- Mod loading from `.morrow` ZIP packages (dlopen), dependency ordering
+- Mod loading from `.mor` ZIP packages (dlopen), dependency ordering
   with retry, per-mod `config.toml`, capability negotiation
 - Command registration (`/ping`-style) with re-entrant dispatch
 

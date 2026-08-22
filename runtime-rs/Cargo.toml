@@ -18,7 +18,7 @@ tempfile = "3"
 
 [dev-dependencies]
 # The integration test (tests/mod_loader_integration.rs) packages the
-# fixture cdylib into a .morrow zip and loads it through the real loader.
+# fixture cdylib into a .mor zip and loads it through the real loader.
 zip = "2"
 tempfile = "3"
 testmod = { path = "tests/fixtures/testmod" }

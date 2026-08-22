@@ -1,5 +1,5 @@
 #!/bin/bash
-# Package a Morrow mod into a .morrow file (ZIP archive).
+# Package a Morrow mod into a .mor file (ZIP archive).
 # Usage: ./scripts/package-mod.sh <mod-directory>
 set -euo pipefail
 
@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MOD_NAME=$(basename "$MOD_DIR")
 # Cargo replaces hyphens with underscores in library names
 CARGO_NAME="${MOD_NAME//-/_}"
-OUTPUT="$PROJECT_ROOT/$MOD_NAME.morrow"
+OUTPUT="$PROJECT_ROOT/$MOD_NAME.mor"
 
 # Detect platform
 ARCH=$(uname -m)
@@ -38,7 +38,7 @@ if [ -z "$LIB_SRC" ]; then
 fi
 LIB_NAME="lib${CARGO_NAME}.${LIB_EXT}"
 
-# Create the .morrow package (ZIP)
+# Create the .mor package (ZIP)
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 

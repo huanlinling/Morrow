@@ -1,4 +1,4 @@
-//! Black-box integration test: real `.morrow` package → real loader →
+//! Black-box integration test: real `.mor` package → real loader →
 //! real event dispatch. No Minecraft involved — the runtime's exported
 //! C ABI is driven through the same entry points the Java host uses.
 //!
@@ -74,7 +74,7 @@ fn read_str<'a>(ptr: *const u8, len: u32) -> &'a str {
 }
 
 // ---------------------------------------------------------------------------
-// Packaging — build a real .morrow zip from the fixture cdylib
+// Packaging — build a real .mor zip from the fixture cdylib
 // ---------------------------------------------------------------------------
 
 fn find_testmod_so() -> std::path::PathBuf {
@@ -90,12 +90,12 @@ fn find_testmod_so() -> std::path::PathBuf {
     );
 }
 
-/// Build `testmod.morrow` in `dir`. The platform dir is hardcoded to
+/// Build `testmod.mor` in `dir`. The platform dir is hardcoded to
 /// linux-x86_64 (this test runs on Linux CI); keep in sync with
 /// `Platform::dir_name()` in the runtime if it ever changes.
 fn package_testmod(dir: &Path) -> std::path::PathBuf {
     let so = find_testmod_so();
-    let pkg = dir.join("testmod.morrow");
+    let pkg = dir.join("testmod.mor");
     let file = std::fs::File::create(&pkg).unwrap();
     let mut zw = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default();

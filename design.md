@@ -21,7 +21,7 @@
 **Morrow 提供：**
 - Rust 编写 Mod（proc macro SDK）
 - Java Host 桥接（Java Agent + Mixin → Panama FFI，v0.12 起独立于 Fabric）
-- 跨平台 Native Artifact 加载（`.morrow` 包格式）
+- 跨平台 Native Artifact 加载（`.mor` 包格式）
 - 稳定 ABI（opaque handles, no struct exposure）
 - Runtime 生命周期管理
 - Host Capability 抽象（registry, events, 未来扩展）

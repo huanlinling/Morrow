@@ -49,7 +49,7 @@ fn on_chat(player: &str, msg: &str) {
 }
 ```
 
-`morrow build` gives you a `.morrow` package. Drop it in `mods/`. Done.
+`morrow build` gives you a `.mor` package. Drop it in `mods/`. Done.
 
 ## Under the hood
 

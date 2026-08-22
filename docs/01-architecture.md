@@ -57,7 +57,7 @@ src/vanilla/java/                   # agent 模式专用（混淆名，只进 ag
 
 **启动序列（MorrowMod.init，由 Mixin 在 loadWorld RETURN 触发）：**
 1. 加载 native runtime → 2. 建 Panama bridge → 3. `morrow_init(ABI_VERSION)`
-→ 4. 扫描 `mods/*.morrow` 逐个 `morrow_load_mod`（失败的包重试一轮，给依赖排序）→
+→ 4. 扫描 `mods/*.mor` 逐个 `morrow_load_mod`（失败的包重试一轮，给依赖排序）→
 5. 绑定 `morrow_dispatch_batch` → 6. `morrow_dispatch_server_start` →
 7. 注册 HostVtable（7 个 upcall stub）。
 
@@ -86,7 +86,7 @@ src/
 │   └── state.rs      # Ready / ShuttingDown / Dead
 ├── host_api.rs       # HostVtable、WorldSnapshot、CommandRegistry、Quarantine
 ├── event/tick.rs     # TickRegistry（mod 名 → fn 指针）
-├── mod_loader/       # .morrow ZIP 解析、manifest、平台 artifact、dlopen
+├── mod_loader/       # .mor ZIP 解析、manifest、平台 artifact、dlopen
 ├── panic.rs          # ffi_boundary：每个 FFI 入口的 catch_unwind 包装
 ├── error.rs          # ErrorChannel
 └── logger.rs

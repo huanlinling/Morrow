@@ -107,7 +107,7 @@ Test: init → shutdown 10 iterations
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 3.1 | 实现 `.morrow` 包读取（ZIP + manifest 解析） | ⬜ |
+| 3.1 | 实现 `.mor` 包读取（ZIP + manifest 解析） | ⬜ |
 | 3.2 | 实现平台 artifact 选择 | ⬜ |
 | 3.3 | 实现 `morrow_load_mod(path)` 完整流程 | ⬜ |
 | 3.4 | 实现 Mod Registry（注册/查找/卸载） | ⬜ |
@@ -120,7 +120,7 @@ Test: init → shutdown 10 iterations
 
 ```
 [main/INFO] [Morrow]: Scanning mods/...
-[main/INFO] [Morrow]: Found: mods/hello-morrow.morrow
+[main/INFO] [Morrow]: Found: mods/hello-morrow.mor
 [main/INFO] [Morrow]: Loading hello-morrow v0.1.0...
 [main/INFO] [Morrow]:   Platform: linux-x86_64
 [main/INFO] [Morrow]:   Entry: morrow_mod_init
@@ -200,7 +200,7 @@ fn init(ctx: &mut Context) -> Result<(), MorrowError> {
 普通签名 handler)而非注册式 EventBus — 与符号发现 ABI 匹配;EventBus
 (优先级、Arc)留在 v2 规划。额外修复:init panic 穿过 FFI 边界
 (catch_unwind 包裹)、`player_death` null cause 的 `read_str` UB、
-生产镜像缺 chat-bot.morrow。
+生产镜像缺 chat-bot.mor。
 
 ---
 
@@ -234,7 +234,7 @@ v0.16(架构优化,见 design.md 评审结论):
   失败槽位自动归还
 - Java 事件缓冲直接写 native MemorySegment(per-tick confined
   arena,design.md §5.1)— 消除 Java heap 往返与 Arena.global() 增长
-- 新增真实链路集成测试(testmod cdylib → .morrow 打包 → 加载 →
+- 新增真实链路集成测试(testmod cdylib → .mor 打包 → 加载 →
   派发,不启动 Minecraft);首次运行即抓出命令派发死锁
   (commands 锁跨回调持有,handler 内调 API 重入 data 锁)并修复
 
@@ -363,7 +363,7 @@ cargo install morrow-cli                      ✅ 从 crates.io 安装实测
 morrow new my-first-mod                       ✅
 morrow build                                  ✅
 morrow package                                ✅
-# → my-first-mod.morrow 可被 MorrowHost 加载   ✅ 布局与 package-mod.sh 一致（e2e 同款已加载）
+# → my-first-mod.mor 可被 MorrowHost 加载   ✅ 布局与 package-mod.sh 一致（e2e 同款已加载）
 ```
 
 ---

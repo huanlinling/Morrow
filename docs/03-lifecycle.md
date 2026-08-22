@@ -57,7 +57,7 @@ T=0      服务器 loadWorld 完成 → MinecraftServerMixin.onLoadWorld → Mor
            ├─ 1. NativeLibraryLoader.load()   → libmorrow_runtime.so
            ├─ 2. PanamaBridge.create()        → SymbolLookup + downcall handles
            ├─ 3. morrow_init(ABI_VERSION)     → runtime_handle（版本不符 = 0，拒绝启动）
-           ├─ 4. 扫描 mods/*.morrow → 逐个 morrow_load_mod（三段式，design.md §1.4）
+           ├─ 4. 扫描 mods/*.mor → 逐个 morrow_load_mod（三段式，design.md §1.4）
            │     失败包重试一轮（依赖排序兜底）
            ├─ 5. 绑定 morrow_dispatch_batch downcall
            ├─ 6. morrow_dispatch_server_start

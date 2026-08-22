@@ -17,7 +17,7 @@ Morrow is an **independent native mod loader** for Minecraft. Write mods in Rust
 - 🦀 **Rust SDK** — `#[morrow::mod_main]`, Context API, log macros
 - ⚡ **1 FFM call/tick** — batch event dispatch, cost independent of mod count
 - 🔒 **Panic isolation** — mod crash never takes down the server
-- 📦 **Cross-platform** — `.morrow` packages per OS/arch
+- 📦 **Cross-platform** — `.mor` packages per OS/arch
 - 🔌 **Independent** — Java Agent + Mixin, no mod framework dependency
 
 ## Quick Start
@@ -61,7 +61,7 @@ cd bridge-java && ./gradlew runServer
 # 1. Build the agent jar → bridge-java/build/libs/morrow-host-1.20.1-1.0.1-agent.jar
 cd bridge-java && ./gradlew agentJar
 
-# 2. Drop .morrow packages into the server's mods/ directory
+# 2. Drop .mor packages into the server's mods/ directory
 
 # 3. Start the server (verified on Minecraft 1.20.1, JDK 21)
 java --enable-preview --enable-native-access=ALL-UNNAMED \
@@ -160,7 +160,7 @@ morrow/
 make build          # Build Rust runtime + mods
 make test           # Run Rust unit tests
 make test-bridge    # Run Panama bridge tests
-make package-hello  # Package hello-morrow.morrow
+make package-hello  # Package hello-morrow.mor
 ```
 
 ## License

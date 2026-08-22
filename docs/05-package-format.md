@@ -1,8 +1,8 @@
-# 05 — .morrow 包格式规范
+# 05 — .mor 包格式规范
 
 ## 概述
 
-`.morrow` 是 Morrow Mod 的分发格式。它是一个 ZIP 文件（使用 store 压缩，优先速度），包含 metadata + 多平台 native artifacts + 可选的 assets。
+`.mor` 是 Morrow Mod 的分发格式。它是一个 ZIP 文件（使用 store 压缩，优先速度），包含 metadata + 多平台 native artifacts + 可选的 assets。
 
 ## 版本
 
@@ -11,7 +11,7 @@
 ## 文件结构
 
 ```
-my-mod.morrow
+my-mod.mor
 │
 ├── manifest.toml                 # 必需：包元数据
 │
@@ -167,7 +167,7 @@ morrow-cli package ./my-mod
 
 ```
 Java Host 侧:
-1. Path modFile = Path.of("mods/my-mod.morrow")
+1. Path modFile = Path.of("mods/my-mod.mor")
 2. NativeModPackage pkg = ModPackageLoader.load(modFile)
 3. pkg.validateManifest()           // 检查必填字段
 4. pkg.checkCompatibility()          // 验证 api_version + mc version
@@ -180,6 +180,6 @@ Java Host 侧:
 ## 注意事项
 
 - **不要压缩 native artifact** — 使用 ZIP store 方法，因为 .so/.dll 已经是 ELF/PE 格式，二次压缩无意义且拖慢加载
-- **不嵌入 JAR** — .morrow 是独立格式，不由 Java 类加载器管理
+- **不嵌入 JAR** — .mor 是独立格式，不由 Java 类加载器管理
 - **安全性** — v1 不验证签名，信任本地 mods/ 目录下的文件
-- **大小限制** — 建议单个 .morrow < 50MB（含所有平台 artifact）
+- **大小限制** — 建议单个 .mor < 50MB（含所有平台 artifact）

@@ -3,7 +3,7 @@
 #   make build         → build everything
 #   make test          → run all tests
 #   make test-bridge   → Panama bridge tests (M0 + M1)
-#   make package-hello → create hello-morrow.morrow
+#   make package-hello → create hello-morrow.mor
 #   make clean         → remove build artifacts
 
 .PHONY: build build-runtime build-mods test test-bridge package-hello clean
@@ -45,4 +45,4 @@ clean:
 	@echo "==> Cleaning build artifacts..."
 	cargo clean
 	rm -rf bridge-java/out/
-	rm -f *.morrow
+	rm -f *.mor

@@ -61,7 +61,7 @@ public class MorrowMod {
         if (runtimeHandle == 0) { log("ERROR", "ABI mismatch"); return; }
         log("INFO", "Runtime handle=" + runtimeHandle);
 
-        // 4. Load .morrow packages
+        // 4. Load .mor packages
         MethodHandle loadMod;
         try {
             loadMod = bridge.downcall("morrow_load_mod",
@@ -72,7 +72,7 @@ public class MorrowMod {
         Path modsDir = Path.of("mods");
         if (Files.isDirectory(modsDir)) {
             try {
-                var pkgs = Files.list(modsDir).filter(p -> p.toString().endsWith(".morrow")).toList();
+                var pkgs = Files.list(modsDir).filter(p -> p.toString().endsWith(".mor")).toList();
                 var failed = new ArrayList<Path>();
                 for (var p : pkgs) {
                     if (!loadPackage(bridge, loadMod, p)) failed.add(p);

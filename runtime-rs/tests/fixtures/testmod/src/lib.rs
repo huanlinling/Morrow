@@ -1,4 +1,4 @@
-//! Integration-test mod. Built as a cdylib, packaged into a `.morrow`
+//! Integration-test mod. Built as a cdylib, packaged into a `.mor`
 //! zip by `runtime-rs/tests/mod_loader_integration.rs`, and loaded
 //! through the real loader. Every behavior leaves a trace in the host
 //! log (`morrow::info!`) or a `send_message`, which the test host

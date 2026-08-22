@@ -24,10 +24,10 @@ fn find_noop_so() -> std::path::PathBuf {
     panic!("libnoop_mod.so not found — build the workspace first (`cargo build --release`)");
 }
 
-/// Build `{name}.morrow` in `dir` containing the shared noop cdylib.
+/// Build `{name}.mor` in `dir` containing the shared noop cdylib.
 fn package_noop(dir: &Path, name: &str) -> std::path::PathBuf {
     let so = find_noop_so();
-    let pkg = dir.join(format!("{name}.morrow"));
+    let pkg = dir.join(format!("{name}.mor"));
     let file = std::fs::File::create(&pkg).unwrap();
     let mut zw = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default();

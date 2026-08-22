@@ -1,7 +1,7 @@
 //! morrow-cli — `morrow new` / `morrow build` / `morrow package`.
 //!
 //! Thin tool for mod authors: scaffold a cdylib mod project, build it,
-//! and zip the result into a `.morrow` package the host can load.
+//! and zip the result into a `.mor` package the host can load.
 //! No repo checkout required — the SDK comes from crates.io.
 
 use std::env;
@@ -20,7 +20,7 @@ fn main() {
             eprintln!("morrow — native Minecraft mod toolchain\n");
             eprintln!("  morrow new <name>   scaffold a mod project");
             eprintln!("  morrow build        build the mod (cargo build --release)");
-            eprintln!("  morrow package      zip it into <name>.morrow for the mods/ dir");
+            eprintln!("  morrow package      zip it into <name>.mor for the mods/ dir");
             exit(if args.is_empty() { 0 } else { 2 });
         }
     }
@@ -107,7 +107,7 @@ fn must_be_mod_project() -> PathBuf {
     cwd
 }
 
-/// (platform dir in the .morrow zip, library file name)
+/// (platform dir in the .mor zip, library file name)
 fn platform_lib(cargo_name: &str) -> (String, String) {
     let arch = match env::consts::ARCH {
         "x86_64" => "x86_64",
@@ -141,7 +141,7 @@ fn cmd_package() {
         exit(1);
     }
 
-    let out = cwd.join(format!("{dir_name}.morrow"));
+    let out = cwd.join(format!("{dir_name}.mor"));
     let file = fs::File::create(&out).unwrap();
     let mut zip = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default()

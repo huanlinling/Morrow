@@ -7,7 +7,7 @@
 | JDK | Temurin 21（`--enable-preview`，Panama 在 21 仍 preview） | Java host + 桥接测试 |
 | Rust | stable 1.80+ | runtime / SDK / 示例 mod |
 | Gradle | wrapper 8.10（自动下载）+ fabric-loom 1.7.4 | dev 模式 runServer + Agent JAR |
-| Python 3 | — | `scripts/package-mod.sh` 打包 .morrow |
+| Python 3 | — | `scripts/package-mod.sh` 打包 .mor |
 | make/bash/gcc | — | Makefile 编排 + Rust 链接 |
 
 ## 构建产物与入口
@@ -17,7 +17,7 @@ Makefile
 ├── make build          cargo build --release（runtime + 3 个示例 mod）
 ├── make test           cargo test（单元 + 集成）
 ├── make test-bridge    bash bridge-java/build.sh（Panama 桥接测试）
-├── make package-hello  scripts/package-mod.sh × 3 → *.morrow 包
+├── make package-hello  scripts/package-mod.sh × 3 → *.mor 包
 └── make clean
 
 bridge-java/build.sh（无 Gradle 依赖，javac 直编）:
