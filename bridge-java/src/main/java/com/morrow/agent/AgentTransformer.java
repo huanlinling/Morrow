@@ -44,6 +44,11 @@ final class AgentTransformer implements ClassFileTransformer {
 
     private static volatile boolean configRegistered;
 
+    /** First game class whose load registers the mixin config. Defaults to
+     *  the server entry point; the client agent overrides it to the client
+     *  Main before the first game class loads. */
+    static volatile String configTrigger = "net/minecraft/server/Main";
+
     @Override
     public byte[] transform(ClassLoader loader, String name, Class<?> beingRedefined,
                             ProtectionDomain protectionDomain, byte[] classfileBuffer) {
@@ -66,7 +71,7 @@ final class AgentTransformer implements ClassFileTransformer {
             // --add-opens java.base/java.net=ALL-UNNAMED on the launch line.
             HostLink.install(loader);
         }
-        if (name.equals("net/minecraft/server/Main") && !configRegistered) {
+        if (name.equals(configTrigger) && !configRegistered) {
             configRegistered = true;
             Mixins.addConfiguration("morrow.mixins.json");
         }

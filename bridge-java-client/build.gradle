@@ -1,0 +1,79 @@
+plugins { id 'java' }
+
+// Client twin of the server agent jar. Plain Java (no loom): the shared
+// host (MorrowMod / EventBuffer / PanamaBridge / NativeLibraryLoader) is
+// game-free, so we compile it straight from ../bridge-java/src/main/java
+// and only exclude the server-specific files.
+
+repositories {
+    mavenCentral()
+    maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
+}
+
+configurations { agent }
+
+dependencies {
+    agent("net.fabricmc:sponge-mixin:${project.mixin_version}") {
+        exclude group: 'com.google.guava'
+        exclude group: 'com.google.code.gson'
+    }
+}
+
+// Mixin 0.8.5 bundles ASM 9.2, which can't parse Java 21 class files.
+configurations.agent {
+    resolutionStrategy.force 'org.ow2.asm:asm:9.7.1',
+            'org.ow2.asm:asm-tree:9.7.1',
+            'org.ow2.asm:asm-commons:9.7.1',
+            'org.ow2.asm:asm-util:9.7.1',
+            'org.ow2.asm:asm-analysis:9.7.1'
+}
+
+group = project.maven_group
+version = project.mod_version
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+sourceSets {
+    main {
+        // Reuse the server's game-free host + agent sources in place.
+        java.srcDirs = ['src/main/java', '../bridge-java/src/main/java']
+        java.exclude 'com/morrow/agent/MorrowAgent.java'    // SERVER premain
+        java.exclude 'com/morrow/host/ServerApiFabric.java' // server adapter
+        java.exclude 'com/morrow/mixin/**'                  // server mixins
+        compileClasspath += configurations.agent
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += ['--enable-preview', '-proc:none']
+    options.release = 21
+}
+
+def nativeLibDir = file("${rootDir}/../target/release")
+
+tasks.register('clientAgentJar', Jar) {
+    dependsOn tasks.named('jar')
+    archiveFileName = "morrow-client-${project.minecraft_version}-${project.version}-agent.jar"
+    from('src/main/resources-agent')
+    from(zipTree(tasks.named('jar').flatMap { it.archiveFile }))
+    from(configurations.agent.collect { zipTree(it) })
+    from(nativeLibDir) {
+        include 'libmorrow_runtime.so'
+        into 'natives/linux-x86_64'
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/MANIFEST.MF'
+    manifest {
+        attributes(
+                'Premain-Class': 'com.morrow.agent.MorrowAgentClient',
+                'Agent-Class': 'com.morrow.agent.MorrowAgentClient',
+                'Can-Redefine-Classes': 'true',
+                'Can-Retransform-Classes': 'true'
+        )
+    }
+}
+
+tasks.named('build') { dependsOn tasks.named('clientAgentJar') }

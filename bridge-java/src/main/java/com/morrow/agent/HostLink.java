@@ -21,7 +21,7 @@ final class HostLink {
         try {
             Method addURL = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
             addURL.setAccessible(true);
-            addURL.invoke(urlLoader, MorrowAgent.class.getProtectionDomain()
+            addURL.invoke(urlLoader, HostLink.class.getProtectionDomain()
                     .getCodeSource().getLocation());
             installed = true;
         } catch (Throwable e) {

@@ -6,9 +6,13 @@ bridge-java/out/
 bridge-java/build/
 bridge-java/.gradle/
 bridge-java/run/
+bridge-java-client/out/
+bridge-java-client/build/
+bridge-java-client/.gradle/
 *.class
 *.jar
 !bridge-java/gradle/wrapper/gradle-wrapper.jar
+!bridge-java-client/gradle/wrapper/gradle-wrapper.jar
 
 # Ferrum packages (built artifacts)
 *.mor
